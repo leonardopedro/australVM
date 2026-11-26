@@ -5745,14 +5745,24 @@ the reason now reads as a size the machine cannot supply, not as an arbitrary ca
 251 MB the compile is both superlinear in time and past the available address space.
 
 **Where the namespace sweep stands.** The 475-declaration pause this section was written in is
-long past: the ledger now holds **1 389 verified of 3 975**, and every row in it is a pass. The
+long past: the ledger now holds **2 473 verified of 3 975**, and every row in it is a pass. The
 five non-passes the paused log carried have since been decided one way or the other —
 `renameCore` is the measurement above, the `Φ` and `hΔ0` rejections became verdicts with
 `§13.62b`'s `mm0_ident` fix, and `.EnvModelM.swapP`/`.swapTyP` have `§13.62f`. Two later runs
 were OOM-killed at the same declaration, `.TgtNodePres.kit` the last line of each log; `§13.62h`
-reproduces the kill alone and fixes its cause. Every finished row survives in the ledger, so a
-resume replays the 1 389 as `memo` hits — about ten minutes — and the closures, the rules applied
-and the failure histogram land only at a clean exit, in `_build/conleche/model-scan.log`.
+reproduces the kill alone, `§13.62j` fixes its cause in the checker, and `§13.62k` fixes the reason
+reader that was recording derivations as verdicts.
+
+Every finished row survives in the ledger, so a resume replays the finished set as `memo` hits —
+minutes, not the hours the real work took — which is why the run was restarted once per defect
+(the recursion limit, the reader, the checker's heap) instead of exiting on a histogram that
+counts a fixed defect's output: 2 472 rows replayed after the first restart, 2 473 after the third.
+The closures, the rules applied and the failure histogram land only at a clean exit, in
+`_build/conleche/model-scan.log`; `_build/conleche/sweep-exit-report.md` collects them together
+with the post-exit `--rekey` and the statement audit. **They are not folded here yet** — the run
+in flight is the first one whose every class is a property of the declaration rather than of the
+driver or the checker, and the fold happens when it exits. Until then the only number this
+section can state without guessing is the ledger's: 2 473 verified, 0 recorded as failed.
 
 ### 13.62d `swapP` and `swapTyP`: the 240 s emit bound was the limit, the checker is the wall
 
@@ -6004,12 +6014,63 @@ exit 0 in 1.9 s wall, 195 MB peak RSS**, and the highwater counters say how clos
 Exit 0 is past the checker's own `not all sorts / terms / theorems proved` checks and its sorry
 check, so the derivation is accepted, not merely un-rejected. The shortfall was **6.0 % of one
 buffer** — 3 942 entries — and no other buffer was within a factor of five. The repair is a
-one-line change upstream in `mm0-c` (or a growable heap); until the installed checker carries it,
-the sweep keeps this row in `over the checker's own heap`, and the class means "this checker's
-constant", not "this derivation is wrong".
+one-line change upstream in `mm0-c`, and it is applied: `HEAP_SIZE (1 << 17)` now sits in
+`../mm0-rs/mm0-c/verifier_types.c` (committed there as `4bbd4fe`), the normal build
+(`gcc main.c -O2`, no `-D` flags) was installed as `~/.local/bin/mm0-c`, and *that* binary
+re-verifies the same artifact in **1.78 s / 195 632 KB peak, exit 0**. The `-DHIGHWATER` copies
+under `_build/mm0-c-*` stay as the measurement build; the default build prints no counters. The
+sweep was restarted on the installed checker, so `over the checker's own heap` is no longer a
+class the run can produce unless a larger derivation outgrows 2^17 — the class meant "this
+checker's constant", not "this derivation is wrong".
+
+That restart also needed the driver to stop resolving the checker by name: inside `nix develop`
+the `mm0-c` on `PATH` is the nixpkgs package
+(`/nix/store/…-mm0-0.1.0-unstable-2026-09-30/bin/mm0-c`), so an installed rebuild is unreachable
+however fresh it is — the first restart after the rebuild would have measured the package again.
+The driver now takes the path from `SCAN_MM0_C` (default `mm0-c`, overridable like the other
+bounds), and the sweep runs with `SCAN_MM0_C=/home/leo/.local/bin/mm0-c`, visible in the unit's
+environment. Checked both ways: one declaration through the override (`.declBasisPB_emptyK`,
+8 447 rules, **17.0 s, pass**) and the same run pointed at a path that does not exist, which stops
+with `FileNotFoundError` instead of falling back to the package.
 
 No second row in the run hit that class. The only other `mm0-c` non-pass in the part-4 log,
 `.declQuotPB_at`, is a rejection whose verdict the reason reader did not capture — it returned a
-fragment of the rejected statement (`ucc (tsucc (tsucc …`) instead of the checker's line — which is
-a defect in the driver's reason extraction, separate from this capacity question and not fixed
-here.
+fragment of the rejected statement (`ucc (tsucc (tsucc …`) instead of the checker's line. That is
+a defect in the driver's reason extraction, separate from this capacity question; `§13.62k`
+diagnoses and fixes it.
+
+### 13.62k The reason reader read the wrong end of the dump: `.declQuotPB_at`'s verdict
+
+The row above is a *reason* that is not one: `mm0-c ✗ .declQuotPB_at: mm0-c: ucc (tsucc (tsucc …`
+is a piece of the statement, cut mid-token. The reader
+(`mm0_c_reason()` in `scripts/lean-proof-scan`) took the last non-empty line before the
+`── the derivation ──` banner in the first 8 KiB of stderr, on the reading that the checker prints
+its verdict, then the banner, then the statement it rejected.
+
+Reproduced from `mm0-c`'s own `fail()` (`verifier.c`), which prints in this order: `stmt:
+<offset>`, the command dump, a blank line, the verdict (`at <name>: <reason>`, or the reason alone
+when it has no name), and only then `debug_print_input()`, which echoes the input line it was
+reading. The old reader therefore depended on the banner being inside its 8 KiB prefix, and for a
+`URef` command the dump is not a banner but *the expression being unified, on one line* —
+`debug_print_cmd` prints it with `debug_print_expr`. On `.declQuotPB_at` that line ran past the
+prefix, so the split found no banner, `last_meaningful()` returned the tail of the dump line, and
+the row recorded a fragment of `tsucc` arithmetic as the checker's decision.
+
+The reader now parses the layout instead of a prefix: it reads the stream in 1 MiB chunks, drops
+everything before the blank line that ends the command dump, and returns the line after it — a
+`\n\n` straddling a chunk boundary is carried one byte. Without a `stmt:` header the verdict is
+the first line, which covers the checker's standalone messages (`at %lX: 'thm' uses sorry`,
+`error: some theorems used sorry`) and parser failures before the first statement. Nothing after
+the verdict is read, which is what matters: the echo is up to 4.5 GB on
+`.TgtNodePres.kit._proof_1`. A 256 MiB cap on the scan bounds a pathological dump; on overflow
+the reason is the checker's stdout (empty in every rejection measured), not a dump fragment.
+
+Verified against measured output, not only constructed cases: the real dump `mm0-c` produced on
+`_proof_1` before it was killed (10 705 709 B of `heap overflow` dump, captured at
+`_build/conleche/mm0c-heap/real.err`) yields `at thm__proof_1: heap overflow`; a 1 107 819-byte
+synthetic `URef` line — the shape that defeated the old reader — yields its verdict; the
+boundary at 64 KiB, at 64 KiB + 1 MiB − 1, + 1 MiB, and the same two offsets one chunk later all
+yield the verdict; the no-header and empty-stream cases yield their line and `(no output)`. The
+sweep was restarted on this reader as well, so the failure histogram it exits with names
+classes instead of quoting derivations — the reason `§13.62c`'s closures could not be folded from
+the part-4 log.

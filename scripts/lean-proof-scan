@@ -96,23 +96,72 @@ def tail_text(path: Path, limit: int = 8192) -> str:
         return ""
 
 
+# A rejected derivation is dumped in full, so the reader walks the stream and
+# stops at the verdict instead of holding the dump. `fail()` prints, in order,
+# `stmt: <offset>`, the command dump, a blank line, the verdict, and only then
+# the input echo. Only a URef dump can be large (it prints the whole expression
+# being unified on one line); 256 MiB of it is far past anything measured, and
+# the cap keeps a pathological one from stalling the sweep.
+MM0_C_READ_CAP = 1 << 28
+
+
+def mm0_c_verdict(err: Path, cap: int = MM0_C_READ_CAP) -> str:
+    """The line `mm0-c` printed as its decision, not what it dumped with it.
+
+    Two layouts, both measured from `verifier.c::fail()`:
+
+      stmt: <offset>\ncmd: <dump>\n[ucmd: <dump>\n]\n<verdict>\n\n<input echo>
+
+    or the verdict on its own when the checker failed before it had a statement
+    (`at %lX: 'thm' uses sorry`, `error: some theorems used sorry`, a parser
+    failure). In the first, the verdict is the line after the dump's blank line;
+    the dump is one line per command and a `URef` line is the expression being
+    unified, which on `.declQuotPB_at` alone ran past 8 KiB, so the boundary has
+    to be found in the stream rather than in a fixed-size prefix. Nothing after
+    the verdict is read: that is the echo, up to 4.5 GB on
+    `.TgtNodePres.kit._proof_1`.
+    """
+    try:
+        fh = open(err, "rb")
+    except OSError:
+        return ""
+    with fh:
+        buf = fh.read(1 << 16)
+        if not buf.startswith(b"stmt: "):
+            return buf.split(b"\n", 1)[0].decode("utf-8", "replace").strip()
+        read = len(buf)
+        while True:
+            cut = buf.find(b"\n\n")
+            if cut >= 0:
+                rest = buf[cut + 2:].split(b"\n", 1)[0]
+                if not rest and read < cap:
+                    rest = fh.readline().split(b"\n", 1)[0]
+                return rest.decode("utf-8", "replace").strip()
+            if read >= cap:
+                return ""
+            chunk = fh.read(1 << 20)
+            if not chunk:
+                return ""
+            read += len(chunk)
+            # A `\n\n` may straddle the chunk boundary; one byte carries it.
+            buf = buf[-1:] + chunk
+
+
 def mm0_c_reason(err: Path, out: Path) -> str:
     """What `mm0-c` decided, not the derivation it printed with the decision.
 
-    On rejection the checker prints its verdict and then the whole statement it
-    rejected, so the *last* line of its stderr is a fragment of that dump
-    (measured: 4.5 GB on `.TgtNodePres.kit._proof_1`). The verdict is the last
-    line *before* the `── the derivation ──` banner.
+    On rejection the checker prints its verdict and then the statement it
+    rejected, so neither end of its stderr is the verdict in general: it opens
+    with `stmt: <offset>` and closes with a fragment of the dump (measured:
+    `.declQuotPB_at` reported as `ucc (tsucc …`).
     """
-    try:
-        with open(err, "r", errors="replace") as fh:
-            head = fh.read(8192)
-    except OSError:
-        head = ""
-    verdict = re.split(r"\n-+ ──", head)[0]
-    if verdict.strip():
-        return last_meaningful(verdict)
-    return last_meaningful(tail_text(err) + tail_text(out))
+    verdict = mm0_c_verdict(err)
+    if verdict:
+        return verdict
+    # Died before printing one (a signal, an empty stream). Its stdout is empty
+    # in every rejection measured, so the fallback says what it can and does not
+    # quote a dump fragment as if it were the checker's decision.
+    return last_meaningful(tail_text(out))
 
 def classify(reason: str) -> str:
     """One bucket per kind of missing support, keyed on the deriver's own words."""
@@ -157,6 +206,11 @@ MM0_RS_MEM_GB = int(os.environ.get("SCAN_MM0_RS_MEM_GB", "10"))
 # more than 3.9 GB in ten minutes), so a rejected giant can run for as long as
 # its trace takes to write. Budget it, and overridable like the others.
 MM0_C_TIMEOUT = int(os.environ.get("SCAN_MM0_C_TIMEOUT", "900"))
+# Which checker, by path. Inside `nix develop` the PATH `mm0-c` is the nixpkgs
+# package, so a checker rebuilt from `../mm0-rs` (the heap repair in §13.62j) is
+# unreachable by name no matter where it is installed; a rebuild that the sweep
+# silently does not use is worse than no rebuild at all.
+MM0_C = os.environ.get("SCAN_MM0_C", "mm0-c")
 
 
 # ── the ledger of proved statements ──────────────────────────────────────────
@@ -359,7 +413,7 @@ def reread_ok(full0: Path, full1: Path, mmb: Path) -> str | None:
     if c.returncode != 0 or "sorry" in (c.stdout + c.stderr):
         return "mm0-rs: " + last_meaningful(c.stdout + c.stderr)
     with full0.open() as fh:
-        k = run(["mm0-c", str(mmb)], stdin=fh)
+        k = run([MM0_C, str(mmb)], stdin=fh)
     mmb.unlink(missing_ok=True)
     if k.returncode != 0:
         return "mm0-c: " + last_meaningful(k.stdout + k.stderr)
@@ -767,7 +821,7 @@ def main() -> int:
         try:
             try:
                 with open(full0) as fh0, open(log0, "w") as fo, open(log1, "w") as fe:
-                    k = run(["mm0-c", str(out / "full.mmb")], stdin=fh0,
+                    k = run([MM0_C, str(out / "full.mmb")], stdin=fh0,
                             stdout=fo, stderr=fe, timeout=MM0_C_TIMEOUT)
             finally:
                 # The transcript is evidence only until the reason is read out

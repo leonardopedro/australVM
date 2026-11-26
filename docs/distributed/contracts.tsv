@@ -83,3 +83,12 @@ C81	runtime	U	unfer_consensus/src/net.rs	tested	docs/distributed/evidence/d19-ch
 C82	runtime	U	unfer_consensus/src/node.rs	tested	docs/distributed/evidence/d19-channel-contracts.log
 C83	runtime	U	unfer_consensus/src/bin/unfer_node.rs	tested	docs/distributed/evidence/d19-channel-contracts.log
 C84	runtime	U	unfer_consensus/src/sim.rs	tested	docs/distributed/evidence/d19-channel-contracts.log
+C85	runtime	A	stdlib/net/ChannelContract.aui	tested	docs/distributed/evidence/d19-channel-contracts.log
+C86	runtime	A	stdlib/net/ChannelContract.aum	tested	docs/distributed/evidence/d19-channel-contracts.log
+C87	runtime	A	examples/distributed/ChannelContractProbe.aum	tested	docs/distributed/evidence/d19-channel-contracts.log
+C88	runtime	A	safestos/cranelift/src/channel_contracts.rs	tested	docs/distributed/evidence/d19-channel-contracts.log
+C89	runtime	A	scripts/check-distributed-wrappers	tested	docs/distributed/evidence/d19-channel-contracts.log
+C90	proof	A	docs/distributed.mm0	tested	docs/distributed/evidence/d20-distributed-trace.log
+C91	proof	A	scripts/distributed2mm0	tested	docs/distributed/evidence/d20-distributed-trace.log
+C92	proof	A	mm0/distributed_trace.mm1	tested	docs/distributed/evidence/d20-distributed-trace.log
+C93	proof	A	mm0/fixtures/distributed_request_trace.json	tested	docs/distributed/evidence/d20-distributed-trace.log

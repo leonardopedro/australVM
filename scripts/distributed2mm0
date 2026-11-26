@@ -1,0 +1,408 @@
+#!/usr/bin/env python3
+"""distributed2mm0 — certify one finite distributed request trace in MM0.
+
+Input: the pinned trace in `mm0/fixtures/distributed_request_trace.json`.
+Output: `mm0/distributed_trace.{mm0,mm1}` — one theorem claiming the trace is a
+run of the automaton in `docs/distributed.mm0` from `st_idle` back to
+`st_idle`. The proof carries one `run_cons` per event, so `mm0-c` re-checks
+every transition rather than trusting the emitter.
+
+The state binds request id, payload digest and epoch, and persistence is a
+state (`st_durable`), not a comment. The negative controls mutate the response
+identity, the event order and the persistence boundary; `verify` requires
+`mm0-rs` to reject each mutant and proves the mutation actually changed the
+artifact.
+
+Modes:
+    generate   write the artifacts
+    check      drift gate: regenerate and compare, no toolchain needed
+    verify     check + mm0-rs + mm0-c + the five mutation controls
+    selftest   emitter audit only, no toolchain
+
+Exit codes: 0 ok, 1 failure, 2 verify without mm0-rs/mm0-c.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mm0_emit import (  # noqa: E402
+    coverage_line,
+    defn,
+    numeral_lines,
+    pub_theorem,
+    trust_split_line,
+)
+
+AVM = Path(__file__).resolve().parent.parent
+THEORY = AVM / "docs" / "distributed.mm0"
+TRACE = AVM / "mm0" / "fixtures" / "distributed_request_trace.json"
+OUT_DIR = AVM / "mm0"
+STEM = "distributed_trace"
+
+THEORY_TERMS = [
+    "st_idle", "st_pending", "st_durable", "st_applied", "st_rejected",
+    "e_open", "e_submit", "e_persist", "e_accept", "e_reject", "e_release",
+    "trans", "tl_nil", "tl_cons", "run",
+]
+
+# A trace is pinned by a length and a transition count. Both are contracts: a
+# shorter trace or a proof that stopped using an edge is a failed control, not
+# a smaller success.
+BUDGET = {"length": 10, "transitions": 10, "certificates": 1}
+
+MUTATIONS = [
+    "response-request",
+    "response-digest",
+    "response-epoch",
+    "event-order",
+    "persistence",
+]
+
+
+class CertificateError(Exception):
+    """Any loud refusal: a bad trace, a drifted artifact, a surviving mutant."""
+
+
+class Unverifiable(Exception):
+    """The mm0 toolchain is absent; verify exits 2 rather than passing."""
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_trace(path: Path = TRACE) -> dict:
+    try:
+        trace = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise CertificateError(f"cannot read {path}: {error}") from error
+    if not isinstance(trace, dict) or not isinstance(trace.get("events"), list):
+        raise CertificateError(f"{path}: expected an object with an events list")
+    if not isinstance(trace.get("name"), str) or not trace["name"]:
+        raise CertificateError(f"{path}: missing trace name")
+    allowed = {"open", "submit", "persist", "accept", "reject", "release"}
+    for index, event in enumerate(trace["events"]):
+        if not isinstance(event, dict) or event.get("op") not in allowed:
+            raise CertificateError(f"{path}: event {index} has an unknown op")
+        if event["op"] in {"open", "accept", "reject"}:
+            for field in ("request", "digest", "epoch"):
+                if field not in event:
+                    raise CertificateError(f"{path}: event {index} lacks {field}")
+                if not isinstance(event[field], int) or event[field] < 0:
+                    raise CertificateError(f"{path}: event {index} {field} is not a nat")
+    return trace
+
+
+def identity(event: dict) -> tuple[int, int, int]:
+    return event["request"], event["digest"], event["epoch"]
+
+
+def audit(events: list[dict]) -> list[tuple[str, tuple[int, int, int] | None]]:
+    """Independent replay: return (rule, arguments) for each event.
+
+    A refusal names the rule that has no edge, so a mutation cannot pass just
+    because it changed an unrelated field.
+    """
+    state: tuple[str, tuple[int, int, int] | None] = ("idle", None)
+    steps: list[tuple[str, tuple[int, int, int] | None]] = []
+    for index, event in enumerate(events):
+        op = event["op"]
+        values = identity(event) if op in {"open", "accept", "reject"} else None
+        if op == "open":
+            if state[0] != "idle":
+                raise CertificateError(
+                    f"event {index}: open from {state[0]}, not idle")
+            state = ("pending", values)
+            steps.append(("t_open", values))
+        elif op == "submit":
+            if state[0] != "pending":
+                raise CertificateError(
+                    f"event {index}: submit from {state[0]}, not pending")
+            steps.append(("t_submit", state[1]))
+        elif op == "persist":
+            if state[0] != "pending":
+                raise CertificateError(
+                    f"event {index}: persist from {state[0]}, not pending")
+            state = ("durable", state[1])
+            steps.append(("t_persist", state[1]))
+        elif op in {"accept", "reject"}:
+            if state[0] != "durable":
+                raise CertificateError(
+                    f"event {index}: {op} from {state[0]}, not durable")
+            if values != state[1]:
+                raise CertificateError(
+                    f"event {index}: {op} identity {values} does not match "
+                    f"the pending request {state[1]}")
+            state = ("applied" if op == "accept" else "rejected", values)
+            steps.append((f"t_{op}", values))
+        elif op == "release":
+            if state[0] not in {"applied", "rejected"}:
+                raise CertificateError(
+                    f"event {index}: release from {state[0]}, not a terminal receipt")
+            steps.append((f"t_release_{state[0]}", state[1]))
+            state = ("idle", None)
+    if state[0] != "idle":
+        raise CertificateError(f"trace ends in {state[0]}, not idle")
+    return steps
+
+
+def event_term(event: dict) -> str:
+    op = event["op"]
+    if op in {"open", "accept", "reject"}:
+        request, digest, epoch = identity(event)
+        return f"(e_{op} {request} {digest} {epoch})"
+    return f"e_{op}"
+
+
+def rule_term(rule: str, args: tuple[int, int, int] | None) -> str:
+    """A proof-term rule name: MM0 infers its binders from the goal.
+
+    Proof mode takes premises, not axiom arguments. `(t_open 7 11 1)` is
+    rejected as extra arguments; the expected `trans` proposition determines
+    the request/digest/epoch instead. Repeating `t_open` for the second request
+    is fine because each occurrence is unified independently.
+    """
+    del args
+    return rule
+
+
+def timeline_term(events: list[dict]) -> str:
+    body = "tl_nil"
+    for event in reversed(events):
+        body = f"(tl_cons {event_term(event)} {body})"
+    return body
+
+
+def proof_term(steps: list[tuple[str, tuple[int, int, int] | None]]) -> str:
+    if not steps:
+        return "run_nil"
+    rule, args = steps[0]
+    return f"(run_cons {rule_term(rule, args)} {proof_term(steps[1:])})"
+
+
+def render(events: list[dict], steps: list[tuple[str, tuple[int, int, int] | None]]) -> tuple[str, str]:
+    if len(events) != BUDGET["length"]:
+        raise CertificateError(
+            f"trace length {len(events)} != pinned {BUDGET['length']}")
+    if len(steps) != BUDGET["transitions"]:
+        raise CertificateError(
+            f"transition count {len(steps)} != pinned {BUDGET['transitions']}")
+    numerals = sorted({
+        event[field]
+        for event in events
+        if event["op"] in {"open", "accept", "reject"}
+        for field in ("request", "digest", "epoch")
+    })
+    body_lines = [event_term(event) for event in events]
+    body = "\n".join(body_lines + [timeline_term(events), proof_term(steps)])
+    theory = THEORY.read_text()
+    header = [
+        "-- distributed finite trace certificate (D20, generated).",
+        "--",
+        f"-- Source trace: mm0/fixtures/{TRACE.name} (sha256 {sha256(TRACE)})",
+        f"-- Target theory: docs/distributed.mm0 (sha256 {sha256(THEORY)})",
+        f"-- trace length: {len(events)}",
+        "-- transitions exercised: " + ",".join(sorted({rule for rule, _ in steps})),
+        trust_split_line(STEM, BUDGET["transitions"], 0, BUDGET["certificates"]),
+        coverage_line(body, THEORY_TERMS),
+        "-- assumptions: consensus ordering, D17 authority identity, TLS authentication",
+        "-- assumed: 0 (-)",
+        "",
+    ]
+    base = "\n".join(
+        header
+        + [theory.rstrip("\n"), ""]
+        + numeral_lines(numerals)
+        + [
+            "",
+            defn("distributed_request_lifecycle_timeline", "L",
+                 f" {timeline_term(events)} "),
+        ]
+    )
+    statement = "run distributed_request_lifecycle_timeline st_idle st_idle"
+    mm0 = base + "\ntheorem distributed_request_lifecycle: $ " + statement + " $;\n"
+    mm1 = base + "\n" + pub_theorem(
+        "distributed_request_lifecycle", statement, proof_term(steps)
+    ) + "\n"
+    return mm0, mm1
+
+
+def generate() -> tuple[str, str]:
+    trace = load_trace()
+    steps = audit(trace["events"])
+    return render(trace["events"], steps)
+
+
+def check_drift(mm0_text: str, mm1_text: str) -> None:
+    for suffix, fresh in ((".mm0", mm0_text), (".mm1", mm1_text)):
+        path = OUT_DIR / f"{STEM}{suffix}"
+        if not path.exists():
+            raise CertificateError(f"{path.relative_to(AVM)} missing — run scripts/distributed2mm0")
+        if path.read_text() != fresh:
+            raise CertificateError(
+                f"{path.relative_to(AVM)} is out of date — run scripts/distributed2mm0")
+
+
+def mutate_trace(kind: str, events: list[dict]) -> list[dict]:
+    mutated = [dict(event) for event in events]
+    if kind == "response-request":
+        for event in mutated:
+            if event["op"] == "accept":
+                event["request"] += 1
+                return mutated
+    elif kind == "response-digest":
+        for event in mutated:
+            if event["op"] == "accept":
+                event["digest"] += 1
+                return mutated
+    elif kind == "response-epoch":
+        for event in mutated:
+            if event["op"] == "accept":
+                event["epoch"] += 1
+                return mutated
+    elif kind == "event-order":
+        persist = next(i for i, event in enumerate(mutated) if event["op"] == "persist")
+        accept = next(i for i, event in enumerate(mutated) if event["op"] == "accept")
+        mutated[persist], mutated[accept] = mutated[accept], mutated[persist]
+        return mutated
+    elif kind == "persistence":
+        del mutated[next(i for i, event in enumerate(mutated) if event["op"] == "persist")]
+        return mutated
+    raise CertificateError(f"mutation {kind!r} has no target in the trace")
+
+
+def mutant_text(kind: str, mm0_text: str, mm1_text: str) -> tuple[str, str]:
+    """Apply a mutation to both generated certificate files, not a live trace."""
+    if kind == "response-request":
+        old, new = "(e_accept 7 11 1)", "(e_accept 8 11 1)"
+    elif kind == "response-digest":
+        old, new = "(e_accept 7 11 1)", "(e_accept 7 13 1)"
+    elif kind == "response-epoch":
+        old, new = "(e_accept 7 11 1)", "(e_accept 7 11 2)"
+    elif kind == "event-order":
+        old = "(tl_cons e_persist (tl_cons (e_accept 7 11 1)"
+        new = "(tl_cons (e_accept 7 11 1) (tl_cons e_persist"
+    elif kind == "persistence":
+        old = "(tl_cons e_persist (tl_cons (e_accept 7 11 1)"
+        new = "(tl_cons (e_accept 7 11 1)"
+    else:
+        raise CertificateError(f"unknown mutation {kind!r}")
+    out = []
+    for text, label in ((mm0_text, ".mm0"), (mm1_text, ".mm1")):
+        if old not in text:
+            raise CertificateError(f"mutation {kind!r} did not find its target in {label}")
+        mutated = text.replace(old, new, 1)
+        if mutated == text:
+            raise CertificateError(f"mutation {kind!r} did not change {label}")
+        out.append(mutated)
+    return out[0], out[1]
+
+
+def selftest() -> None:
+    trace = load_trace()
+    clean_steps = audit(trace["events"])
+    if len(clean_steps) != BUDGET["transitions"]:
+        raise CertificateError("clean trace does not meet its transition budget")
+    clean0, clean1 = render(trace["events"], clean_steps)
+    for kind in MUTATIONS:
+        mutated = mutate_trace(kind, trace["events"])
+        if mutated == trace["events"]:
+            raise CertificateError(f"selftest/{kind}: mutation did not apply")
+        try:
+            audit(mutated)
+        except CertificateError as error:
+            first = str(error).splitlines()[0][:110]
+            print(f"distributed2mm0 selftest: refused {kind} — {first}")
+        else:
+            raise CertificateError(f"selftest/{kind}: the audit accepted a changed trace")
+        if mutant_text(kind, clean0, clean1) == (clean0, clean1):
+            raise CertificateError(f"selftest/{kind}: certificate text did not change")
+    print("distributed2mm0 selftest: OK — all five trace mutations are refused")
+
+
+def _tools() -> None:
+    for tool in ("mm0-rs", "mm0-c"):
+        if not shutil.which(tool):
+            raise Unverifiable(f"{tool} not on PATH")
+
+
+def _compile(mm0_text: str, mm1_text: str, expect_ok: bool, label: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="distributed2mm0.") as td:
+        directory = Path(td)
+        (directory / f"{STEM}.mm0").write_text(mm0_text)
+        (directory / f"{STEM}.mm1").write_text(mm1_text)
+        compiled = subprocess.run(
+            ["mm0-rs", "compile", str(directory / f"{STEM}.mm1"),
+             str(directory / f"{STEM}.mmb")],
+            capture_output=True, text=True,
+        )
+        output = compiled.stdout + compiled.stderr
+        accepted = compiled.returncode == 0 and "warning" not in output.lower()
+        if accepted != expect_ok:
+            sys.stderr.write(output)
+            raise CertificateError(
+                f"{label}: mm0-rs {'rejected' if expect_ok else 'accepted'} the artifact")
+        if not expect_ok:
+            print(f"distributed2mm0 verify: mm0-rs rejected {label}")
+            return
+        checked = subprocess.run(
+            ["mm0-c", str(directory / f"{STEM}.mmb")],
+            input=mm0_text, capture_output=True, text=True,
+        )
+        if checked.returncode != 0:
+            sys.stderr.write(checked.stdout + checked.stderr)
+            raise CertificateError(f"{label}: mm0-c rejected the artifact")
+        print("distributed2mm0 verify: mm0-rs + mm0-c OK — every transition re-checked")
+
+
+def verify() -> None:
+    _tools()
+    mm0_text, mm1_text = generate()
+    check_drift(mm0_text, mm1_text)
+    _compile(mm0_text, mm1_text, True, "clean trace")
+    for kind in MUTATIONS:
+        mutant0, mutant1 = mutant_text(kind, mm0_text, mm1_text)
+        _compile(mutant0, mutant1, False, f"mutant {kind}")
+    print("distributed2mm0 verify: OK — clean trace accepted, five mutants rejected")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("mode", choices=["generate", "check", "verify", "selftest"])
+    args = ap.parse_args()
+    try:
+        if args.mode == "selftest":
+            selftest()
+            return 0
+        mm0_text, mm1_text = generate()
+        if args.mode == "check":
+            check_drift(mm0_text, mm1_text)
+            print("distributed2mm0 check: OK — artifact in sync with pinned trace and theory")
+            return 0
+        if args.mode == "generate":
+            OUT_DIR.mkdir(parents=True, exist_ok=True)
+            (OUT_DIR / f"{STEM}.mm0").write_text(mm0_text)
+            (OUT_DIR / f"{STEM}.mm1").write_text(mm1_text)
+            print(f"distributed2mm0: wrote mm0/{STEM}.mm0 and mm0/{STEM}.mm1")
+            return 0
+        verify()
+        return 0
+    except Unverifiable as error:
+        print(f"distributed2mm0: [gap] {error}")
+        return 2
+    except CertificateError as error:
+        print(f"distributed2mm0: [fail] {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

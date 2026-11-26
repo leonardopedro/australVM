@@ -563,6 +563,31 @@ PY
             gap "W7: flipped-coefficient certificate not re-checked (no mm0 toolchain)"
         fi
 
+        # D20: the finite distributed request trace. The drift check does not
+        # need a toolchain; the verify half re-checks the certificate and the
+        # five mutated certificates, so the proof is load-bearing rather than
+        # merely regenerated from the same input.
+        if [ -x "$repo_root/scripts/distributed2mm0" ]; then
+            if "$repo_root/scripts/distributed2mm0" check \
+                    >"$_cert_tmp/distributed-check.log" 2>&1; then
+                check "D20: distributed trace certificate is in sync with its pinned trace" true
+            else
+                cat "$_cert_tmp/distributed-check.log" >&2
+                check "D20: distributed trace certificate is in sync with its pinned trace" false
+            fi
+            if command -v mm0-rs >/dev/null 2>&1 && command -v mm0-c >/dev/null 2>&1; then
+                if "$repo_root/scripts/distributed2mm0" verify \
+                        >"$_cert_tmp/distributed-verify.log" 2>&1; then
+                    check "D20: trace accepted and five mutants rejected by mm0-rs + mm0-c" true
+                else
+                    tail -5 "$_cert_tmp/distributed-verify.log" >&2
+                    check "D20: trace accepted and five mutants rejected by mm0-rs + mm0-c" false
+                fi
+            else
+                gap "D20: trace not re-checked (no mm0-rs/mm0-c on PATH)"
+            fi
+        fi
+
         # W8: the ISA layer. Three separate things are checked, because the
         # artifact, the citations and the instruction subset fail differently:
         # (a) mm0-c accepts the theory (it refuses unproved theorems, so a
