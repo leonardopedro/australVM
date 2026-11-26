@@ -5755,30 +5755,42 @@ constant that is 31 % short, not a rejection.
 
 <!-- 13.62c-sweep:begin -->
 **Where the namespace sweep stands**, as the log read at
-`2026-11-26T15:17`. The run in flight has decided
-**2451 of the 3975 declarations**, and the ledger holds **2476 rows,
-every one of them a pass** — a row is appended only for a declaration
-`mm0-c` accepted, so a declaration that failed leaves none. The histogram
+`2026-11-26T16:05`. The run in flight has decided
+**2486 of the 3975 declarations**, and the ledger holds **2476 rows**,
+**2476 of them passes** and **0 recorded failures** — a
+row is appended for a declaration `mm0-c` accepted, or with
+`--record-failures` to say how a failed one was measured. The histogram
 below is what the log has printed so far; it is not folded as a verdict,
 because its largest class names a bound:
 
 | class | rows |
 | --- | ---: |
-| `mm0-rs ✗ over 10 GiB` | 22 |
+| `mm0-rs ✗ over 10 GiB` | 27 |
 | `mm0-rs ⏱ over 240 s` | 10 |
-| `emit ⏱ over 240 s` | 5 |
+| `emit ⏱ over 240 s` | 6 |
 | `mm0-c ✗ at sd1254: store overflow` | 1 |
 
-(22 of those rows are the `over 10 GiB` class alone.)
+(27 of those rows are the `over 10 GiB` class alone.)
 
 **Nothing in that histogram is classified here yet.** A bound names a
 size only once a bigger one has been tried, and the re-measurement of the
-22 `over 10 GiB` rows at 20 G runs behind the sweep
+27 `over 10 GiB` rows at 20 G runs behind the sweep
 (`probe-10gib.sh`, its output in `probe-10gib.log`), rather than being
 assumed: their left-behind artifacts are 250 MB to 1.07 GB of `.mm1`
 against `renameCore`'s 251 MB that exceeded 24 G, which is the expectation
 and not the result.
 <!-- 13.62c-sweep:end -->
+
+**Three runs, joined by declaration.** The block above is a union, not one run. The sweep that
+started at 12:30 was ended by the kernel's OOM killer at 15:39 with 1 510 of 3 975 declarations
+left (`systemctl` recorded `oom-kill`; the unit peaked at 10.3 GB, with a test scan of mine
+running beside it and taking the host past 30 GB). At 15:45 two shards were started over disjoint
+interleaved halves of what remained — interleaved because the tail is not uniform and a
+contiguous split would hand one shard every `genIh*` monster — each in a 12 G cgroup with the
+same per-row bounds as the sweep, so a row's verdict does not depend on which shard measured it.
+All three write into the same ledger, and `merge-logs.py` joins them by declaration, last write
+wins: no declaration can be counted twice, and the closures and histogram above are therefore
+what one run over the whole namespace would have produced.
 
 **Failures, the ledger, and which bound measured them.** The ledger now has a `verdict` column
 (`pass`/`failed`) and a `reason`, appended after the existing twelve so a row written before them
@@ -5787,7 +5799,9 @@ still lines up and reads as a pass; `proved()` gates both memo paths — the exa
 `statement_sha256` — so a recorded failure is measured again next run instead of becoming a hit
 that skips the declaration. `--record-failures` writes those rows (`rules=0`, the checker's own
 words as the reason), off by default because a 10 GiB row costs minutes. Until it existed a
-failed declaration left no row at all, which is why every row this sweep wrote is a pass.
+failed declaration left no row at all, which is why the runs up to the OOM kill wrote only
+passes; the two shards that finished the tail ran with `--record-failures`, so their failures
+are rows too, with the bound in the reason.
 
 What the ledger still cannot express is *which bound* measured a failure. A row's identity is the
 export, the theory, the mode and the declaration; the sweep's 10 GiB is in none of them, so a
