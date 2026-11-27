@@ -225,6 +225,22 @@ else
     fi
 fi
 
+# D21 step 2: the Lean 4 induction shell over arbitrary runs. The Why3
+# theories already induct on the operation list; this is an independent kernel
+# checking the same claims, with `#print axioms` pinning what the proofs rest
+# on (Lean's three standard axioms, nothing else). It needs only the `lean`
+# binary or a `nix` that can build `.#lean`.
+if command -v lean >/dev/null 2>&1 || command -v nix >/dev/null 2>&1; then
+    if out=$(bash "$repo_root/scripts/check-lean-d21" 2>&1); then
+        check "D21: Lean induction shell (19 theorems, no extra axioms)" true
+    else
+        printf '%s\n' "$out"
+        check "D21: Lean induction shell (19 theorems, no extra axioms)" false
+    fi
+else
+    gap "D21: Lean induction shell (tooling absent: neither lean nor nix on PATH)"
+fi
+
 # --- Phase D: the Lean4 -> DeltaNets -> MM0 certificate (docs/lean4mm0.md §5) ---
 #
 # gap_certificate.{mm0,mm1} and layout_certificate.{mm0,mm1} are generated

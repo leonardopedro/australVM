@@ -1,0 +1,11 @@
+$ cargo test --offline -p unfer_consensus --features network --lib net::tests::a_crash -- --nocapture
+running 2 tests
+
+running 1 test
+
+running 1 test
+test net::tests::ledger_publish_crash_child ... test net::tests::ledger_publish_crash_child ... test net::tests::a_crash_mid_publish_keeps_the_committed_state_and_its_watermark ... ok
+test net::tests::a_crash_mid_an_outbox_only_publish_keeps_the_durable_outbox ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 190 filtered out; finished in 0.38s
+

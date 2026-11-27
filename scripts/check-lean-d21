@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# D21 step 2: the Lean 4 induction shell over arbitrary runs.
+#
+# `docs/distributed/lean/D21.lean` restates the three D21 claims and proves them
+# with Lean's own kernel: the run-level theorems (`Epoch.run_non_decreasing`,
+# `Fence.run_fence_le`) are inductions on the operation list, and the replay
+# lemmas quantify over every book. This gate runs the file and audits the
+# trusted base: `#print axioms` must show that no theorem depends on anything
+# beyond Lean's three standard axioms (`propext`, `Quot.sound`,
+# `Classical.choice`), which are the kernel's logic, not assumptions about the
+# claim. `sorryAx` or any other axiom is a failure.
+#
+# The theorem list is pinned: deleting a theorem, or silently weakening one by
+# dropping its `#print axioms` line, is a failed control rather than a smaller
+# success.
+#
+# Lean is an optional toolchain. The shell is preferred (`nix develop .#lean`),
+# but this gate only needs the `lean` binary, so when `lean` is not on PATH it
+# builds the package (`nix build .#lean`) rather than the shell, whose closure
+# includes the sail-riscv model. Absent lean and nix, the run is an explained
+# gap, never a false pass or failure.
+#
+# Usage: scripts/check-lean-d21
+# Exit codes: 0 every theorem checked (or toolchain absent), 1 a check failed.
+
+set -uo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+theory="$root/docs/distributed/lean/D21.lean"
+
+# The theorems the record claims, exactly. A missing line is a failure.
+theorems=(
+    D21.Epoch.step_preserves_wf
+    D21.Epoch.step_non_decreasing
+    D21.Epoch.accepted_takeover_strictly_raises
+    D21.Epoch.stale_takeover_changes_nothing
+    D21.Epoch.first_epoch_is_authority
+    D21.Epoch.run_preserves_wf
+    D21.Epoch.run_non_decreasing
+    D21.Fence.issue_preserves_inv
+    D21.Fence.step_preserves_inv
+    D21.Fence.settle_applies_only_when_current
+    D21.Fence.stale_settle_changes_nothing
+    D21.Fence.fenceLe_trans
+    D21.Fence.step_fenceLe
+    D21.Fence.run_preserves_inv
+    D21.Fence.run_fence_le
+    D21.Replay.replay_is_the_recorded_outcome
+    D21.Replay.equivocation_is_a_conflict
+    D21.Replay.below_floor_is_refused
+    D21.Replay.settle_without_a_record_changes_nothing
+)
+
+# The only axioms a proof in this file may rest on. All three are Lean's
+# standard axioms (propositional extensionality, quotient soundness, and
+# classical choice, which `if`/`simp` reach through decidability); none is a
+# statement about the D21 claims.
+allowed="propext Quot.sound Classical.choice"
+
+if [ ! -f "$theory" ]; then
+    echo "FAIL: theory missing: $theory"
+    exit 1
+fi
+
+lean=""
+if command -v lean >/dev/null 2>&1; then
+    lean="lean"
+elif command -v nix >/dev/null 2>&1; then
+    out=$(nix build "$root#lean" --no-link --print-out-paths 2>/dev/null)
+    if [ -n "$out" ] && [ -x "$out/bin/lean" ]; then
+        lean="$out/bin/lean"
+    fi
+fi
+
+if [ -z "$lean" ]; then
+    echo "[gap] D21 lean induction shell (tooling absent: neither lean nor nix on PATH)"
+    exit 0
+fi
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+output=$("$lean" -o "$tmp/D21.olean" "$theory" 2>&1)
+status=$?
+printf '%s\n' "$output"
+
+if [ "$status" -ne 0 ]; then
+    echo "FAIL: lean exited $status"
+    exit 1
+fi
+
+if printf '%s\n' "$output" | grep -q "declaration uses 'sorry'"; then
+    echo "FAIL: a declaration still uses sorry"
+    exit 1
+fi
+
+fail=0
+for thm in "${theorems[@]}"; do
+    line=$(printf '%s\n' "$output" | grep -F "'$thm' " | head -1)
+    if [ -z "$line" ]; then
+        echo "FAIL: no axiom report for $thm (theorem removed or its audit line deleted?)"
+        fail=1
+        continue
+    fi
+    if printf '%s\n' "$line" | grep -q 'does not depend on any axioms'; then
+        continue
+    fi
+    axioms=$(printf '%s\n' "$line" | sed 's/.*\[\(.*\)\].*/\1/' | tr ',' ' ')
+    for ax in $axioms; do
+        case " $allowed " in
+            *" $ax "*) ;;
+            *)
+                echo "FAIL: $thm depends on disallowed axiom '$ax'"
+                fail=1
+                ;;
+        esac
+    done
+done
+
+if [ "$fail" -ne 0 ]; then
+    exit 1
+fi
+
+total=${#theorems[@]}
+echo "PASS: $total/$total theorems checked; trusted base limited to {propext, Quot.sound, Classical.choice} (lean $("$lean" --version 2>/dev/null | sed 's/^Lean (version \([^,]*\).*/\1/'))"

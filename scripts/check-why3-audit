@@ -24,18 +24,23 @@ step 3 and in its acceptance criteria:
    *not* `Valid` without it, so a control cannot pass by refuting something the
    theory already contradicted -- which is also how a no-op mutation is caught.
 
-**Why the mutation controls are proved in isolation.** Why3 1.8.2 does not
-recognise Z3 5.1.0 and loads it through its fallback driver, and that pairing
-reports a goal that *follows* an `Unknown` goal as `Valid`: on 2026-11-27,
-`goal step_preserves_wf` under the equal-epoch mutation came back
-`Unknown (sat)` and a literal `goal false_second: 1 = 2` placed after it came
-back `Valid (0.01s, 4517 steps)`, while the same false goal alone (or after a
-`Valid` goal) is `Unknown (sat)`. The three proof gates are not affected -- they
-require *every* goal `Valid`, so an `Unknown` fails them and no goal is read
-from a poisoned context -- but a mutation control that sat downstream of a
-failing goal would read a meaningless verdict. Each witness is therefore proved
-against the theory's definitions alone, as the only goal in its file: every
-verdict below rests on one task.
+**Why the mutation controls are proved in isolation.** In Why3, an earlier
+`lemma` declaration is a hypothesis for every later goal in the same module,
+whether or not that lemma's own proof succeeded. A control placed downstream of
+a mutated lemma can therefore read `Valid` because the mutation is *assumed*,
+not because it is refuted: measured 2026-11-27, a false `lemma false_first`
+followed by `goal false_second: 1 = 2` reports `Unknown (sat)` then `Valid
+(0.01s, 15 steps)`, and the SMT task for the second goal literally asserts
+`(forall ((x Int)) (= x (+ x 1)))`; the same two statements written as `goal`s
+both report `Unknown (sat)` (`docs/distributed/evidence/d21-why3-ordering.log`).
+This is Why3's lemma semantics, not a prover-version defect -- it reproduces
+whatever Z3 is installed (Why3 1.8.2 here does not recognise Z3 5.1.0 at all
+and binds it to the generic driver, which is a separate observation). The three
+proof gates are unaffected because they require *every* goal `Valid`, so an
+unproved lemma fails them before it can lend anything to a later goal. Each
+mutation witness below is proved against the theory's definitions alone, as the
+only goal in its file, so no earlier declaration can be inherited: every
+verdict rests on one task.
 
 Why3 is an optional toolchain: when it is absent the whole audit is an explained
 gap, never a false pass or a false failure.
