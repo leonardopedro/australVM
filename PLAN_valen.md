@@ -1,5 +1,14 @@
 # PLAN V — Valen-inspired direction: group borrowing and Rust interop, without growing the kernel
 
+> **Status (2026-11-27 — Merged into [`PLAN_umbrella_production.md`](PLAN_umbrella_production.md)).**
+> All four phases below (`P0` attribution, `P1` group borrowing in
+> `test-programs/suites/018-group-borrow`, `P2` `extern rust` Tier 1 in
+> `test-programs/suites/019-extern-rust`, and `P3` the `umbrella/` prototype)
+> have shipped. All ongoing Rust-interop, adapter-runtime, capability-enforcement,
+> and optional `../rust` oracle planning is now consolidated in
+> [`PLAN_umbrella_production.md`](PLAN_umbrella_production.md). This document is
+> preserved as the historical `P0`–`P3` design and implementation record.
+
 Additive plan, parallel to `PLAN_liquid_types.md` (Plan L) and
 `PLAN_parallel_australvm.md` (Plan B). It rides the same two seams those plans
 ride: the ghost-pass discipline of Plan L (checks that erase before CPS) and
@@ -57,11 +66,11 @@ they are read, never built into anything here (§4, §7):
   `u64`-word vocabulary — and that file is the map of where it stops: a value
   whose `PassMode` is `Pair` or `Indirect` is exactly what the word ABI cannot
   express, which is why tier 1 stays inside the buffer/scalar protocol.
-- **`../rust`** — `rust-lang/rust` at `5debe6a1244` on `main`, **not** the
-  fork's `per-instance-mir` branch (the clone has no such branch). The bifrost
-  code can therefore be read here but not compiled against this toolchain, so
-  no experiment in this tree may be made to depend on it; that is §4's "not
-  adopted" holding in practice rather than by prose.
+- **`../rust`** — `valen-lang/rust` fork at `c6f757802519a0fc2619dd79e0be879601899b06`
+  on branch `per-instance-mir` (7 files, +95/-3 lines over Jan 2026 nightly
+  `d940e56841dd`; unbuilt, no `build/` directory). Read for design reference
+  only; no experiment in the stable path may depend on it (see
+  [`PLAN_umbrella_production.md`](PLAN_umbrella_production.md) §3 UR24 & U32).
 
 ## §1 Why this lands on australVM specifically
 
