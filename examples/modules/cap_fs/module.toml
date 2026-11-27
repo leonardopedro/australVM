@@ -1,0 +1,25 @@
+[module]
+name = "CapFs"
+version = "0.1.0"
+archetypes = ["austral_cps"]
+archetype = "austral_cps"
+entry = "main"
+node = "node-7"
+
+# The verbs the module may call. `rs_cap_open_root` alone is not enough: each
+# call is checked separately, so removing either read or write below is a
+# measured refusal at load time (run.sh's denied case does exactly that).
+[grants]
+kernel = [
+    "rs_cap_open_root",
+    "rs_cap_read",
+    "rs_cap_write",
+]
+
+# Root 0 is the instance state directory and keeps no rights (`rights` names
+# no right at all, so no `state_dir` entry is listed). Index 1 is `data/`,
+# read-only; index 2 is `out/`, able to create and replace a file.
+fs = [
+    { root = "data", rights = "read" },
+    { root = "out", rights = "create,write" },
+]

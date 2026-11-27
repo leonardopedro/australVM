@@ -1,0 +1,152 @@
+-- CapFs — U22's compiled-module capability workflow.
+--
+-- A real Austral module (not a Rust stand-in) that reads `records.txt` under
+-- the capability root at index 1 (a `data/` subtree granted `read`) and writes
+-- it to `result.txt` under the root at index 2 (an `out/` subtree granted
+-- `create,write`). Before writing it attempts `../outside/sentinel.txt` and
+-- requires the host to refuse it; a traversal that succeeded returns a failure
+-- code instead of writing.
+--
+-- The transform is real: every full 64-bit word of the record is incremented
+-- in place through `Austral.Memory`'s `positiveOffset`/`load`/`store`, which the
+-- CPS lowering now maps onto the JIT's own add/deref/store instructions. The JIT
+-- moves one 64-bit word per access, so trailing bytes shorter than a word are
+-- left as they are; `reference.rs` implements exactly that rule. `run.sh`
+-- perturbs the input and requires the output to change with it, compared against
+-- that independent program, so a canned result cannot survive.
+--
+-- Every pointer crosses as a 64-bit word, so each call lowers to the `rs_cap_*`
+-- symbol itself rather than a generated adapter wrapper (which `modhost` does
+-- not build). The host validates both the pointer and the length inside the
+-- verb; this file only claims the ABI it passes.
+--
+-- Authority lives in `module.toml`: the kernel grants name these three verbs
+-- and the `fs` grants name the two roots. Nothing here can widen either.
+pragma Unsafe_Module;
+
+import Austral.Memory (
+    Address,
+    Pointer,
+    allocateBuffer,
+    load,
+    store,
+    positiveOffset
+);
+
+module body CapFs is
+    pragma Foreign_Import(External_Name => "rs_cap_open_root");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_cap_open_root(index: Int64): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_cap_read");
+    pragma Rust_Ownership(Params => "owned, owned, owned, owned, owned", Return => "owned");
+    function rs_cap_read(
+        handle: Int64,
+        path_ptr: Int64,
+        path_len: Int64,
+        data_ptr: Int64,
+        data_len: Int64
+    ): Int64 is
+    end;
+
+    pragma Foreign_Import(External_Name => "rs_cap_write");
+    pragma Rust_Ownership(Params => "owned, owned, owned, owned, owned", Return => "owned");
+    function rs_cap_write(
+        handle: Int64,
+        path_ptr: Int64,
+        path_len: Int64,
+        data_ptr: Int64,
+        data_len: Int64
+    ): Int64 is
+    end;
+
+    -- Rewrite the record in place: each complete 8-byte word (little-endian on
+    -- this host) is increased by one. Every access is a memory builtin, so this
+    -- function is what keeps `positiveOffset`/`load`/`store` exercised.
+    function transform(buffer: Address[Nat8], length: Int64): Unit is
+        let base: Pointer[Int64] := @embed(Pointer[Int64], "$1", buffer);
+        var offset: Int64 := 0;
+        while offset + 8 <= length do
+            let index: Index := @embed(Index, "$1", offset);
+            let word: Pointer[Int64] := positiveOffset(base, index);
+            let value: Int64 := load(word);
+            store(word, value + 1);
+            offset := offset + 8;
+        end while;
+        return nil;
+    end;
+
+    function compute(): Int64 is
+        -- Root 0 is the instance state directory and carries no rights here;
+        -- root 1 is `data/` (read) and root 2 is `out/` (create, write).
+        let input_handle: Int64 := rs_cap_open_root(1);
+        if input_handle < 0 then
+            return input_handle;
+        end if;
+
+        let input_path: Span[Nat8, Static] := "records.txt";
+        let input_path_ptr: Int64 := @embed(Int64, "$1.data", input_path);
+        let input_path_len: Int64 := @embed(Int64, "$1.size", input_path);
+
+        let buffer: Address[Nat8] := allocateBuffer(4096);
+        let buffer_ptr: Int64 := @embed(Int64, "$1", buffer);
+        let read: Int64 := rs_cap_read(
+            input_handle,
+            input_path_ptr,
+            input_path_len,
+            buffer_ptr,
+            4096
+        );
+        if read < 0 then
+            return read;
+        end if;
+        if read = 0 then
+            return -70;
+        end if;
+
+        -- The boundary: a path that leaves the granted root must be refused,
+        -- not answered. A non-negative result means the grant was bypassed.
+        let denied: Span[Nat8, Static] := "../outside/sentinel.txt";
+        let denied_ptr: Int64 := @embed(Int64, "$1.data", denied);
+        let denied_len: Int64 := @embed(Int64, "$1.size", denied);
+        let escaped: Int64 := rs_cap_read(
+            input_handle,
+            denied_ptr,
+            denied_len,
+            buffer_ptr,
+            0
+        );
+        if escaped >= 0 then
+            return -71;
+        end if;
+
+        let output_handle: Int64 := rs_cap_open_root(2);
+        if output_handle < 0 then
+            return output_handle;
+        end if;
+        transform(buffer, read);
+
+        let output_path: Span[Nat8, Static] := "result.txt";
+        let output_path_ptr: Int64 := @embed(Int64, "$1.data", output_path);
+        let output_path_len: Int64 := @embed(Int64, "$1.size", output_path);
+        return rs_cap_write(
+            output_handle,
+            output_path_ptr,
+            output_path_len,
+            buffer_ptr,
+            read
+        );
+    end;
+
+    -- The compiler's entrypoint must return ExitCode. A refused capability
+    -- makes `compute` negative, which is a failed exit, never a silent success.
+    function main(): ExitCode is
+        let written: Int64 := compute();
+        if written >= 0 then
+            return ExitSuccess();
+        else
+            return ExitFailure();
+        end if;
+    end;
+end module body.
