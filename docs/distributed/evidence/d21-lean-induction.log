@@ -1,0 +1,21 @@
+$ scripts/check-lean-d21
+'D21.Epoch.step_preserves_wf' depends on axioms: [propext, Classical.choice, Quot.sound]
+'D21.Epoch.step_non_decreasing' depends on axioms: [propext, Quot.sound]
+'D21.Epoch.accepted_takeover_strictly_raises' does not depend on any axioms
+'D21.Epoch.stale_takeover_changes_nothing' depends on axioms: [propext, Quot.sound]
+'D21.Epoch.first_epoch_is_authority' depends on axioms: [propext, Quot.sound]
+'D21.Epoch.run_preserves_wf' depends on axioms: [propext, Classical.choice, Quot.sound]
+'D21.Epoch.run_non_decreasing' depends on axioms: [propext, Classical.choice, Quot.sound]
+'D21.Fence.issue_preserves_inv' depends on axioms: [propext, Quot.sound]
+'D21.Fence.step_preserves_inv' depends on axioms: [propext, Quot.sound]
+'D21.Fence.settle_applies_only_when_current' does not depend on any axioms
+'D21.Fence.stale_settle_changes_nothing' does not depend on any axioms
+'D21.Fence.fenceLe_trans' depends on axioms: [propext, Classical.choice, Quot.sound]
+'D21.Fence.step_fenceLe' depends on axioms: [propext, Classical.choice, Quot.sound]
+'D21.Fence.run_preserves_inv' depends on axioms: [propext, Quot.sound]
+'D21.Fence.run_fence_le' depends on axioms: [propext, Classical.choice, Quot.sound]
+'D21.Replay.replay_is_the_recorded_outcome' depends on axioms: [propext, Quot.sound]
+'D21.Replay.equivocation_is_a_conflict' depends on axioms: [propext, Quot.sound]
+'D21.Replay.below_floor_is_refused' does not depend on any axioms
+'D21.Replay.settle_without_a_record_changes_nothing' depends on axioms: [propext]
+PASS: 19/19 theorems checked; trusted base limited to {propext, Quot.sound, Classical.choice} (lean 4.30.0)

@@ -100,3 +100,6 @@ C98	proof	A	docs/distributed/why3/epoch_monotonicity.mlw	tested	docs/distributed
 C99	proof	A	docs/distributed/why3/fence_invariant.mlw	tested	docs/distributed/evidence/d21-why3-fence.log
 C100	proof	A	docs/distributed/why3/request_replay.mlw	tested	docs/distributed/evidence/d21-why3-replay.log
 C101	storage	U	unfer_consensus/src/net.rs	tested	docs/distributed/evidence/d19-ledger-crash.log
+C102	proof	A	scripts/check-why3-audit	tested	docs/distributed/evidence/d21-why3-audit.log
+C103	proof	A	scripts/check-lean-d21	tested	docs/distributed/evidence/d21-lean-induction.log
+C104	storage	U	unfer_consensus/src/net.rs	tested	docs/distributed/evidence/d19-ledger-outbox-crash.log

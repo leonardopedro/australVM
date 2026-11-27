@@ -5717,32 +5717,62 @@ proved is proved. What the key cannot see is a change in the emitter that would 
 theorem differently; that produces a different band, hence a miss, which is the conservative
 direction.
 
-### 13.62c `renameCore` at twenty gigabytes: out of reach, not merely over budget
+### 13.62c `renameCore` at twenty gigabytes: over budget at 10 GiB, and closing at 20 G
 
 `§13.62b`'s sweep stopped at `.EnvModelM.renameCore` with `over 10 GiB`, which is a statement
 about the bound it was given, not about the derivation. A budget only classifies a declaration
 as *large* if a bigger bound closes it, so the row was re-measured alone: `--only` on that one
 declaration, `--keep-proofs`, `SCAN_MM0_RS_MEM_GB=20`, `SCAN_MM0_RS_TIMEOUT=1200`, in a cgroup
 of its own (`MemoryMax=20G`, `MemorySwapMax=4G`) so that a runaway child could not take the
-sweep down with it.
+sweep down with it. The second measurement did not re-emit anything: it took the `full.mm1`
+the sweep left behind and ran `mm0-rs compile` on it in the same 20 G cgroup, which is also how
+the probe table below re-measures every bound row (`probe-10gib.sh`).
 
 The emitter is not the problem and does not come close to the bound: it spends about two
 minutes and produces a 251 444 344-byte `full.mm1` (243 508 810 bytes of `.mm0` statement,
-631 633 116 bytes of conversion obligations), with the whole unit peaking at 7.8 GB before
-`mm0-rs` started. `mm0-rs compile` then grows without settling: 15.2 GB at about seven minutes,
-17.3 GB at eleven, 19.9 GB at fourteen, until the kernel OOM-killer ends the unit at 20 G
-memory plus 4 G swap — **15 min 44 s wall, 24 min CPU, no `.mmb` and so no `mm0-c` run**. The
-1200 s timeout was never reached; memory was.
+631 633 116 bytes of conversion obligations), peaking at 0.95 GB before `mm0-rs` started
+(46.7 s and 955 MB of `maxrss`, re-measured 2026-11-27). `mm0-rs compile` on that artifact
+peaks at **17.1 GB** and finishes in **6 min 12 s**, writing a 29 966 736-byte `.mmb` —
+measured twice in a 20 G cgroup
+(`MemoryMax=20G`, `MemorySwapMax=4G`): 373 s and 372 s, both `Finished with result: success`,
+swap untouched, peak read from both the cgroup's `Memory peak` and the child's `maxrss`. So
+`renameCore` is **over the 10 GiB budget it was recorded under, not out of reach**: a 20 G
+sweep closes it, and the artifact-size expectation that a 251 MB term needs more than this
+machine has spare was wrong. The 102 MB / 37 441-rule artifact that needed 819 s of `mm0-rs`
+(`§13.62`) scales to this: at 251 MB the compile is superlinear in time and costs 17.1 GB,
+which is why a 10 GiB bound could never close it.
 
-That answers the question the retry existed to ask, in the direction the row cannot show:
-`renameCore` is not a 10 GiB declaration that a 20 GiB sweep would absorb. A 251 MB proof term
-of this shape needs more memory than this machine has spare (20 GiB plus 4 GiB of swap was the
-whole margin), so it is **out of reach rather than over a chosen budget** — the earlier
-`10 GiB` label was the bound, but there is no bound below the machine's ceiling that would
-close it. It stays a failure in the sweep with the reason it was given; what changes is that
-the reason now reads as a size the machine cannot supply, not as an arbitrary cap. The
-102 MB / 37 441-rule artifact that needed 819 s of `mm0-rs` (`§13.62`) scales to this: at
-251 MB the compile is both superlinear in time and past the available address space.
+That reverses what this section concluded when it was written, and the reversal is kept rather
+than overwritten. A first attempt at the same artifact in the same cgroup grew past 19.9 GB —
+15.2 GB at about seven minutes, 17.3 GB at eleven, 19.9 GB at fourteen — and the kernel
+OOM-killer ended the unit at 15 min 44 s with no `.mmb` and so no `mm0-c` run. The inputs
+that attempt and this one shared have since been compared one at a time, and none of them is
+the difference:
+
+- **The artifact.** Re-emitting `renameCore` twice reproduces `renameCore_typing.mm1` at
+  `sha256 951dff1e…`, byte-identical to the copy the sweep left behind, so both attempts
+  compiled the same 251 444 344 bytes.
+- **The checker.** `mm0-rs` 0.1.0 (`sha256 c04e7e8c…`, dated 2026-11-07) is the binary both
+  attempts ran.
+- **The driver.** The first attempt drove `lean-proof-scan --only`, which differs from the
+  probe in two ways and neither is the difference. Its `SCAN_MM0_RS_MEM_GB` is an
+  `RLIMIT_AS 20 GiB` on the child rather than the cgroup's bound — and the same artifact under
+  exactly that limit (`ulimit -v 20971520`, in a 24 G cgroup that cannot be the limit) closes
+  in 370 s at 17.1 GB. Its emitter and the checker share one cgroup — and the same scan form
+  run today on a row that *does* close, `.blk_ctorFit`, opened 10.7 GB against the bare
+  compile's 10.6 GB, with the group's file cache at 7.7 MB, so the emitter's artifacts are not
+  carried into the peak.
+
+What the first attempt's unit records and today's do not is swapping: 20 G memory peak *and*
+4 G swap peak, 24 min of CPU over 15 min 44 s of wall — about 65 % of a core, the signature of
+pages being moved. Today's four measurements — 373 s and 372 s in a 20 G cgroup, 370 s with the
+20 GiB `RLIMIT_AS` on the child, 366 s at an 18 G cgroup — all peak at 17.1 GB with swap
+untouched. So the difference the record can still show is the state of the host, not the
+measurement's inputs, and the number it leaves is the headroom: a 251 MB artifact that charges
+17.1 GB clears 20 G by 2.9 GB. That is a margin the group can lose to its own swap, which is
+what the earlier attempt recorded and this section cannot reproduce. The row is `over budget`
+on the reproducible measurement; the kill is why the probe table below asks every other bound
+row the same question instead of trusting one reading.
 
 The non-passes the paused log carried have since been decided one way or the other —
 `renameCore` is the measurement above, the `Φ` and `hΔ0` rejections became verdicts with
@@ -5865,6 +5895,25 @@ cgroup of `MemoryMax=20G` + `MemorySwapMax=4G`, a 1260 s cap (`probe-10gib.sh`):
 
 79 re-measured; **53 close** at 20 G, so for them the `10 GiB`, `6 GiB` bound was the limit: those rows are over that budget, not out of reach; **26 are killed** by the cgroup at 20 G + 4 G of swap, which is the whole margin on this 30 GB host, so no bound below its ceiling closes them: out of reach.
 <!-- 13.62c-sweep:end -->
+
+**The rows that did not close at 20 G, asked at the host's own ceiling.** A 24 G probe cannot
+be answered on this machine, and that is measured rather than assumed: a ballast in a 24 G
+cgroup with `MemorySwapMax=0` touched 21.4 GiB, was killed there, and left `Memory peak:
+21.4G` in the unit's record. So the 20 over-10-GiB rows the 20 G probe had recorded as
+out of reach were re-run at **21 G, swap 0**, one at a time (`PROBE_MEM_GB=21
+PROBE_SWAP_GB=0`, the same script, its own `probe-21gib.log`):
+
+| verdict | rows | what it means |
+| --- | ---: | --- |
+| closes | 1 | `genMinorTower`, 421 s, 20.5 GB peak, 33 995 024-byte `.mmb` — over budget, not out of reach |
+| host-bound | 2 | killed at 20.70 GB (`genFit1_core`) and 19.2 GB (`genFit2_core`) of a 21 G cap: the charge never reached the unit's bound, so the host ended them |
+| at the 21 G cap | 17 | still out of reach, and still below the 24 G that was asked for |
+
+Two things follow. The 20 G class was *mostly* budget-limited but not entirely: one of its rows
+needs 21 G, which is the only verdict here that a bigger bound changed. And a kill below the
+unit's own cap is not a verdict at all — `Memory peak` is the group's charge, so a peak that
+stops short of `MemoryMax` says the machine ran out first, which is why the probe now labels
+those rows `host-bound` instead of folding them into `out of reach`.
 
 **Six runs, joined by declaration.** The block above is a union, not one run. The sweep that
 started at 12:30 was ended by the kernel's OOM killer at 15:39 with 1 510 of 3 975 declarations

@@ -232,9 +232,22 @@ jobs:
           # No `../unfer/target` entry: since module_builder no longer builds
           # in this job, nothing writes that directory (the bridge compiles
           # unfer_ffi into its own `target/` as a path dependency).
+          #
+          # The key is the dependency inputs only — deliberately NOT `**/*.rs`.
+          # actions/cache never updates an entry it hit, so a key that changes
+          # with every source edit saves a fresh ~1.6 GB tarball on every push.
+          # The repository budget is 10 GB and the nix caches already hold
+          # ~4.7 GB, so two or three pushes evicted the entry before the next
+          # run could restore it: measured 2026-11-27, the restore step in run
+          # 45964358573 finished in 0 s (a miss) and the post step re-saved
+          # `jit-Linux-f676a65…` at 1.61 GB, a key created and never read. A
+          # stable key keeps one entry that restores, and cargo's own
+          # fingerprints decide what inside it is stale.
           path: |
             ${{ github.workspace }}/safestos/cranelift/target
-          key: jit-${{ runner.os }}-${{ hashFiles('safestos/cranelift/Cargo.lock', 'safestos/cranelift/**/*.rs', 'safestos/cranelift/Cargo.toml') }}
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: jit-${{ runner.os }}-${{ hashFiles('safestos/cranelift/Cargo.lock', 'safestos/cranelift/Cargo.toml', 'rust-toolchain.toml') }}
           restore-keys: |
             jit-${{ runner.os }}-
 
@@ -311,17 +324,6 @@ jobs:
         run: cargo build --release --features unfer-kernel --bin modhost
         working-directory: safestos/cranelift
 
-      # The demo step does not build (MODULE_BUILDER_SKIP_BUILD below), so the
-      # one configuration only it used to compile — the bridge with
-      # `--no-default-features --features unfer-kernel` — is checked here.
-      # `check` still fails on a feature-gated compile error, which is what
-      # that configuration can break in; it does not pay for a second
-      # codegen + link of the bridge, and it writes no `.so`, so the artifacts
-      # the demo loads are the ones steps 9/18 produced.
-      - name: Check the demo feature set still compiles
-        run: cargo check --release --no-default-features --features unfer-kernel -p austral_cranelift_bridge
-        working-directory: safestos/cranelift
-
       - name: Run demo_module positive + UK-4001 gate test
         # The B6-era inline invocation drifted from the fork's current JIT: it
         # omitted --auth-manifest (the JIT denies kernel calls without it, so
@@ -336,8 +338,11 @@ jobs:
         # toolchain and so recompiling all of it. Everything it needs is in
         # place: `austral.exe` from the OCaml build, and
         # `libaustral_cranelift_bridge.so` + `modhost` from steps 9/18. The
-        # demo therefore runs against the default-feature
-        # build; the demo-only feature set is held to a compile check above.
+        # demo therefore runs against the default-feature build; the demo-only
+        # feature set is held to a compile check in the `clippy (deny
+        # warnings)` job, where cargo has already run in check mode over the
+        # same dependency features (it cost 4.2 min of release re-checking
+        # here, measured 2026-11-27).
         env:
           MODULE_BUILDER_SKIP_BUILD: "1"
         run: nix develop -c bash ${{ github.workspace }}/../unfer/tools/module_builder run ${{ github.workspace }}/../unfer/demo_module --deny uk_event_probability

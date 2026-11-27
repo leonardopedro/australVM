@@ -1,0 +1,51 @@
+# D21 (step 3): the audit of the three Why3 theories -- what they are allowed to
+# assume, and whether their guard rules still carry the claims.
+#
+# Theories: docs/distributed/why3/{epoch_monotonicity,fence_invariant,
+#           request_replay}.mlw
+# Gate:     scripts/check-why3-audit, wired into scripts/verify-invariants.
+#
+# Two checks, because "every goal is Valid" does not answer either of them:
+#
+# 1. Trusted base. No theory may declare `axiom`, `parameter` or `val` (no
+#    axiom may simply assert a target guarantee), and its `use` list must be
+#    exactly the one the record names: int.Int + list.List for the epoch
+#    theory, int.Int + list.List + option.Option for the fence theory, and
+#    int.Int + option.Option for the replay theory. Adding an import is a
+#    change to what the proof rests on, so it has to be reviewed as one.
+#
+# 2. Guard mutations. Ten edits in the Rust model check's mutation vocabulary
+#    (equal-epoch takeover, epoch rollback, claim at epoch 0, stale settle,
+#    generation wrap, stale release, duplicate-answered-fresh, prune-revives,
+#    settle-invents-a-record, double-count) must each be refuted by a ground
+#    witness: a concrete execution the *mutated* rules allow and the unmutated
+#    theory forbids. A witness is only accepted when the unmutated theory does
+#    not prove it, so a no-op mutation (or a witness that is already false) is
+#    refused instead of counted.
+#
+# Why the witnesses are proved against isolated definitions: Why3 1.8.2 does
+# not recognise Z3 5.1.0 and loads it through its fallback driver, and that
+# pairing reports a goal that *follows* an `Unknown` goal as `Valid` (measured
+# 2026-11-27: a literal `goal false_second: 1 = 2` after an unproved lemma came
+# back `Valid`). The three proof gates are unaffected -- they require every goal
+# Valid, so an Unknown fails them -- but nothing here is read from a context
+# another goal built.
+
+$ why3 --version
+Why3 platform, version 1.8.2
+
+$ python3 scripts/check-why3-audit
+[pass] epoch_monotonicity.mlw: no axiom/parameter/val; trusted base int.Int, list.List
+[pass] fence_invariant.mlw: no axiom/parameter/val; trusted base int.Int, list.List, option.Option
+[pass] request_replay.mlw: no axiom/parameter/val; trusted base int.Int, option.Option
+[pass] mutation equal-epoch-takeover (epoch_monotonicity.mlw): stale_takeover_changes_nothing is refuted by a ground execution the unmutated rule forbids
+[pass] mutation epoch-rollback (epoch_monotonicity.mlw): step_non_decreasing is refuted by a ground execution the unmutated rule forbids
+[pass] mutation claim-at-epoch-zero (epoch_monotonicity.mlw): first_epoch_is_authority is refuted by a ground execution the unmutated rule forbids
+[pass] mutation stale-settle (fence_invariant.mlw): stale_settle_changes_nothing is refuted by a ground execution the unmutated rule forbids
+[pass] mutation generation-wrap (fence_invariant.mlw): next_strictly_newer is refuted by a ground execution the unmutated rule forbids
+[pass] mutation stale-release (fence_invariant.mlw): fence_transitions_require_current is refuted by a ground execution the unmutated rule forbids
+[pass] mutation duplicate-answered-fresh (request_replay.mlw): replay_is_the_recorded_outcome is refuted by a ground execution the unmutated rule forbids
+[pass] mutation prune-revives (request_replay.mlw): below_floor_is_refused is refuted by a ground execution the unmutated rule forbids
+[pass] mutation settle-invents-a-record (request_replay.mlw): settle_without_a_record_changes_nothing is refuted by a ground execution the unmutated rule forbids
+[pass] mutation double-count (request_replay.mlw): record_does_not_count_an_existing_entry is refuted by a ground execution the unmutated rule forbids
+PASS: 3 theories audited, 10/10 guard mutations refuted by a witness (why3 1.8.2)
