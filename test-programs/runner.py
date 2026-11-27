@@ -44,6 +44,18 @@ os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(
     + ([os.environ["LD_LIBRARY_PATH"]] if os.environ.get("LD_LIBRARY_PATH") else [])
 )
 
+# What counts as a module source. A `source-copy.txt` fixture is compared over
+# exactly these, so the copy is held to the modules its origin declares and to
+# nothing else (a neighbour like `RequestStateReference.rs` is not copied).
+MODULE_SUFFIXES: tuple[str, ...] = (".aui", ".aum")
+
+
+def module_sources(directory: str) -> list[str]:
+    """The `*.aui`/`*.aum` file names directly inside `directory`."""
+    return sorted(
+        name for name in os.listdir(directory) if name.endswith(MODULE_SUFFIXES)
+    )
+
 
 #
 # Error Reporting
@@ -849,13 +861,6 @@ def _run_fixture_copy_test(test: TestFixtureCopy) -> TestResult:
         origin,
         test.directory,
     ]
-
-    def module_sources(directory: str) -> list[str]:
-        return sorted(
-            name
-            for name in os.listdir(directory)
-            if name.endswith(".aui") or name.endswith(".aum")
-        )
 
     if not os.path.isdir(origin):
         return TestFail(

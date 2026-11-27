@@ -5754,31 +5754,31 @@ then read on `.declQuotPB_at` — `at sd1254: store overflow` — is `§13.62l`:
 constant that is 31 % short, not a rejection.
 
 <!-- 13.62c-sweep:begin -->
-**Where the namespace sweep stands**, as the log read at
-`2026-11-26T15:35`. The run in flight has decided
-**2465 of the 3975 declarations**, and the ledger holds **2569 rows**,
-**2569 of them passes** and **0 recorded failures** — a
-row is appended for a declaration `mm0-c` accepted, or with
-`--record-failures` to say how a failed one was measured. The histogram
-below is what the log has printed so far; it is not folded as a verdict,
-because its largest class names a bound:
+**Where the namespace sweep stands.** The sweep reached its own end at
+`2026-11-26T21:45` with
+**verified closures 3870/3975**:
+`21527472` rules applied and `5895963` assumptions (1523.5 per declaration),
+2474 declarations replayed as memo hits rather than re-emitted. The ledger
+holds **3896 rows**, **3871 of them passes** and **25
+recorded failures**: a row is appended for a declaration `mm0-c` accepted, or
+with `--record-failures` to say how a failed one was measured. The post-exit
+`--rekey` returned rc=0 and the statement audit over the finished namespace
+rc=0; `sweep-exit-report.md` carries both logs, and the sweep's own summary
+is quoted there verbatim.
+
+The histogram it exited with, 105 failed rows of 3975:
 
 | class | rows |
 | --- | ---: |
-| `mm0-rs ✗ over 10 GiB` | 25 |
-| `mm0-rs ⏱ over 240 s` | 10 |
-| `emit ⏱ over 240 s` | 6 |
+| `mm0-rs ✗ over 10 GiB` | 55 |
+| `mm0-rs ✗ over 6 GiB` | 24 |
+| `mm0-rs ⏱ over 240 s` | 13 |
+| `emit ⏱ over 240 s` | 12 |
 | `mm0-c ✗ at sd1254: store overflow` | 1 |
 
-(25 of those rows are memory bounds: `mm0-rs ✗ over 10 GiB`.)
-
-**Nothing in that histogram is classified here yet.** A bound names a
-size only once a bigger one has been tried, and the re-measurement of the
-25 `over 10 GiB` rows at 20 G runs behind the sweep
-(`probe-10gib.sh`, its output in `probe-10gib.log`), rather than being
-assumed: their left-behind artifacts are 250 MB to 1.07 GB of `.mm1`
-against `renameCore`'s 251 MB that exceeded 24 G, which is the expectation
-and not the result.
+**The memory-bound classes hold `79` rows (`over 10 GiB` and `over 6 GiB`) and none has been
+re-measured**: `probe-10gib.log` holds no verdicts, so this section does not
+classify them.
 <!-- 13.62c-sweep:end -->
 
 **Six runs, joined by declaration.** The block above is a union, not one run. The sweep that

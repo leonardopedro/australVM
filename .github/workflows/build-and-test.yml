@@ -93,8 +93,11 @@ jobs:
       # The default run compiles `DEFAULT_SUITES`, and the collector refuses a
       # suite directory that list does not name. This is the unit test for that
       # rule (scratch directories, no compiler), so a guard that stopped firing
-      # is a red step rather than a quietly shortened default run.
-      - name: runner suite list is honest
+      # is a red step rather than a quietly shortened default run. It also holds
+      # every `source-copy.txt` fixture to the modules its `examples/` origin
+      # declares, so a dropped module is named here rather than only inside a
+      # later compiled run.
+      - name: runner suite list and copy fixtures are honest
         run: nix develop -c bash -c 'python3 test-programs/test_runner.py'
 
       # The `austral` binary has no rpath, so every step that runs it needs
@@ -337,8 +340,11 @@ jobs:
 
       # The log of a failed step needs admin rights, so the per-binary split is
       # reported as annotations, which the run page shows on its own: one line
-      # per test binary (name + passed/failed/ignored) plus the tail of any
-      # failure. A compile error leaves no `test result:` line, so the census
+      # per test binary (name + passed/failed/ignored) plus, on failure, the
+      # lines the census does not already carry (`failures:`, the test names,
+      # the `error:` line) — not the `Compiling`/`Running`/`test result:` lines
+      # it repeats, since GitHub shows ten annotations per step. A compile
+      # error leaves no `test result:` line, so the census
       # says that instead of printing nothing. The census itself is
       # `scripts/avm-test-census`, so its failure path (`::error` level, the
       # tail annotations, the compile-failure line) has a fixture in the repo and
