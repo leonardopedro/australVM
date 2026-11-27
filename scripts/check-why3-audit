@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+"""D21: audit the three Why3 theories -- trusted base and mutation controls.
+
+`scripts/check-why3-{epoch,fence,replay}` answer "is every goal still Valid?".
+A set of valid goals does not answer two other questions the plan puts in D21
+step 3 and in its acceptance criteria:
+
+1. **What were the proofs allowed to assume?** Every assumption has to be in the
+   record, and no axiom may simply assert one of the target guarantees. Both
+   halves are pinned here: a theory may not declare `axiom`, `parameter` or
+   `val` (nothing is assumed or left as an interface), and its `use` list must
+   be exactly the trusted base the record names -- adding an import is a change
+   to what the proof rests on and has to be reviewed as one.
+
+2. **Can the goals fail?** A theory whose guards drift can keep proving
+   something, just not the claim. Each mutation below is a real guard edit (the
+   same vocabulary as the Rust model check's mutations: equal-epoch takeover,
+   epoch rollback, claim at epoch 0, stale settle, generation wrap, stale
+   release, duplicate-as-fresh, prune-revives, settle-invents-a-record,
+   double-count), and the claim it breaks is refuted by a **ground witness**: a
+   concrete execution of the mutated rules that the unmutated theory forbids
+   (the plan's toy-witness pattern; the Rust finite models are the same idea
+   over whole state spaces). The witness must be `Valid` under the mutation and
+   *not* `Valid` without it, so a control cannot pass by refuting something the
+   theory already contradicted -- which is also how a no-op mutation is caught.
+
+**Why the mutation controls are proved in isolation.** Why3 1.8.2 does not
+recognise Z3 5.1.0 and loads it through its fallback driver, and that pairing
+reports a goal that *follows* an `Unknown` goal as `Valid`: on 2026-11-27,
+`goal step_preserves_wf` under the equal-epoch mutation came back
+`Unknown (sat)` and a literal `goal false_second: 1 = 2` placed after it came
+back `Valid (0.01s, 4517 steps)`, while the same false goal alone (or after a
+`Valid` goal) is `Unknown (sat)`. The three proof gates are not affected -- they
+require *every* goal `Valid`, so an `Unknown` fails them and no goal is read
+from a poisoned context -- but a mutation control that sat downstream of a
+failing goal would read a meaningless verdict. Each witness is therefore proved
+against the theory's definitions alone, as the only goal in its file: every
+verdict below rests on one task.
+
+Why3 is an optional toolchain: when it is absent the whole audit is an explained
+gap, never a false pass or a false failure.
+
+Usage: scripts/check-why3-audit
+Exit codes: 0 audit passed (or why3 absent), 1 an audit or mutation control
+            failed.
+"""
+
+from __future__ import annotations
+
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+WHY3_DIR = ROOT / "docs" / "distributed" / "why3"
+
+# The trusted base each theory is allowed to rest on. Pinned, because an import
+# is an assumption: a theory that starts importing real numbers or a map library
+# proves a different claim than the one the record states.
+TRUSTED_BASE = {
+    "epoch_monotonicity.mlw": ["int.Int", "list.List"],
+    "fence_invariant.mlw": ["int.Int", "list.List", "option.Option"],
+    "request_replay.mlw": ["int.Int", "option.Option"],
+}
+
+# Forbidden declarations: an axiom (or a Why3 `parameter`/`val`, which is the
+# same promise in another form) could assert a target guarantee outright.
+ASSUMPTION_KEYWORDS = ("axiom", "parameter", "val")
+
+# (theory, label, [(old, new), ...], claim refuted, witness goal body)
+#
+# The witness is a ground execution of the *mutated* rules that the unmutated
+# theory forbids, and the claim beside it is the goal it refutes -- so a reader
+# can see which guarantee the guard was carrying. A mutation that leaves the
+# witness unprovable has stopped changing behaviour (or stopped applying) and is
+# refused; a witness the unmutated theory also proves is refused too, so a
+# control cannot pass by being about nothing.
+BOOK = (
+    '{ holds0 = true; w0 = WINDOW; holds1 = false; w1 = empty_window; '
+    'retained = RETAINED; capacity = 2; max_scopes = 2; max_incarnations = 2 }'
+)
+
+
+def book(window: str, retained: int = 0) -> str:
+    return BOOK.replace("WINDOW", window).replace("RETAINED", str(retained))
+
+
+MUTATIONS = [
+    (
+        "epoch_monotonicity.mlw",
+        "equal-epoch-takeover",
+        [("if proposed > s.epoch then", "if proposed >= s.epoch then")],
+        "stale_takeover_changes_nothing",
+        "(takeover { epoch = 1; gen = 2; held = true } 1)"
+        " = { epoch = 1; gen = 1; held = true }",
+    ),
+    (
+        "epoch_monotonicity.mlw",
+        "epoch-rollback",
+        [("\n    else s\n\n  let function claim",
+          "\n    else { s with epoch = s.epoch - 1 }\n\n  let function claim")],
+        "step_non_decreasing",
+        "(takeover { epoch = 2; gen = 1; held = true } 1).epoch = 1",
+    ),
+    (
+        "epoch_monotonicity.mlw",
+        "claim-at-epoch-zero",
+        [("else if s.epoch = 0 then { epoch = 1; gen = 1; held = true }",
+          "else if s.epoch = 0 then { epoch = 0; gen = 1; held = true }")],
+        "first_epoch_is_authority",
+        "(claim { epoch = 0; gen = 0; held = false }).held"
+        " && (claim { epoch = 0; gen = 0; held = false }).epoch = 0",
+    ),
+    (
+        "fence_invariant.mlw",
+        "stale-settle",
+        [("""    | Settle ->
+        if current s then { s with has_holder = false; released = true; phase = fired }
+        else s
+""",
+          """    | Settle ->
+        if s.has_fence then { s with has_holder = false; released = true; phase = fired }
+        else s
+""")],
+        "stale_settle_changes_nothing",
+        # A released fence the sink has already passed settles a disabled job.
+        "(step { has_fence = true; epoch = 1; generation = 1; has_holder = false;"
+        " phase = disabled; released = true } Settle).phase = fired",
+    ),
+    (
+        "fence_invariant.mlw",
+        "generation-wrap",
+        [("if s.generation < max_gen then s.epoch else s.epoch + 1", "s.epoch")],
+        "next_strictly_newer",
+        # The run hands out (1,3) then (1,1): the fence goes backwards.
+        "(issue { has_fence = true; epoch = 1; generation = 3; has_holder = true;"
+        " phase = claimed; released = false })"
+        " = { has_fence = true; epoch = 1; generation = 1; has_holder = true;"
+        " phase = claimed; released = false }",
+    ),
+    (
+        "fence_invariant.mlw",
+        "stale-release",
+        [("""    | Release ->
+        if current s then { s with has_holder = false; released = true; phase = queued }
+        else s
+""",
+          """    | Release ->
+        { s with has_holder = false; released = true; phase = queued }
+""")],
+        "fence_transitions_require_current",
+        # Nothing has ever been claimed, yet a release is recorded as released.
+        "(step initial Release).released && not (step initial Release).has_fence",
+    ),
+    (
+        "request_replay.mlw",
+        "duplicate-answered-fresh",
+        [("if e.digest = digest then Duplicate e.outcome", "if e.digest = digest then Fresh")],
+        "replay_is_the_recorded_outcome",
+        # Sequence 1, because an id at the floor is a retention refusal first.
+        "admit " + book("{ floor = 0; has0 = false; e0 = dummy;"
+                        " has1 = true; e1 = { digest = 7; outcome = Decided 1 } }", 1)
+        + " 0 1 7 = Fresh",
+    ),
+    (
+        "request_replay.mlw",
+        "prune-revives",
+        [("if seq <= w.floor then BelowRetention w.floor",
+          "if seq < w.floor then BelowRetention w.floor")],
+        "below_floor_is_refused",
+        "admit " + book("{ floor = 1; has0 = true; e0 = { digest = 7; outcome = Decided 1 };"
+                        " has1 = false; e1 = dummy }", 1) + " 0 1 7 = Fresh",
+    ),
+    (
+        "request_replay.mlw",
+        "settle-invents-a-record",
+        [("        if lookup b.w0 seq = None then b else { b with w0 = set_outcome b.w0 seq o }",
+          "        { b with w0 = set_entry b.w0 seq { digest = 0; outcome = o } }"),
+         ("        if lookup b.w1 seq = None then b else { b with w1 = set_outcome b.w1 seq o }",
+          "        { b with w1 = set_entry b.w1 seq { digest = 0; outcome = o } }")],
+        "settle_without_a_record_changes_nothing",
+        "(settle " + book("empty_window") + " 0 0 (Decided 1)).w0.has0",
+    ),
+    (
+        "request_replay.mlw",
+        "double-count",
+        [("retained = if fresh then b.retained + 1 else b.retained",
+          "retained = b.retained + 1")],
+        "record_does_not_count_an_existing_entry",
+        "(record " + book("{ floor = 0; has0 = true; e0 = { digest = 7; outcome = Pending 0 };"
+                          " has1 = false; e1 = dummy }", 1) + " 0 0 9 1).retained = 2",
+    ),
+]
+
+
+class AuditError(Exception):
+    """A loud refusal: an assumption appeared, or a mutation survived."""
+
+
+def read_theory(name: str) -> str:
+    path = WHY3_DIR / name
+    if not path.is_file():
+        raise AuditError(f"theory missing: {path}")
+    return path.read_text()
+
+
+def audit_trusted_base(name: str, text: str) -> str:
+    """Refuse any declaration that assumes something, and pin the imports."""
+    found = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("(*"):
+            continue
+        for keyword in ASSUMPTION_KEYWORDS:
+            # `val` also occurs inside prose and identifiers; a declaration is a
+            # line that starts with the keyword and has no `=` definition.
+            if stripped.startswith(keyword + " ") or stripped == keyword:
+                found.append(f"{name}:{number}: {stripped}")
+    if found:
+        raise AuditError(
+            "the theory assumes something instead of proving it (no axiom, "
+            "parameter or val is allowed):\n  " + "\n  ".join(found)
+        )
+
+    uses = sorted(
+        line.strip()[len("use "):].strip() for line in text.splitlines()
+        if line.strip().startswith("use ")
+    )
+    expected = sorted(TRUSTED_BASE[name])
+    if uses != expected:
+        raise AuditError(
+            f"{name}: trusted base changed -- uses {uses}, record names {expected}"
+            " (adding an import is a change to what the proof rests on)"
+        )
+    return ", ".join(uses)
+
+
+def run_why3(path: Path, timelimit: int = 30) -> tuple[str, int]:
+    completed = subprocess.run(
+        ["why3", "prove", "-P", "z3", "--timelimit", str(timelimit), str(path)],
+        capture_output=True, text=True,
+    )
+    return completed.stdout + completed.stderr, completed.returncode
+
+
+def parse_goals(output: str) -> dict[str, bool]:
+    """Map each goal name to whether Why3 reported it Valid."""
+    goals: dict[str, bool] = {}
+    current: str | None = None
+    for line in output.splitlines():
+        if line.startswith("Goal "):
+            current = line[len("Goal "):].rstrip(".").strip()
+            goals[current] = False
+        elif current and line.startswith("Prover result is: Valid"):
+            goals[current] = True
+    return goals
+
+
+DECLARATION = re.compile(r"^  (?:lemma|goal|let rec )", re.MULTILINE)
+
+
+def witness_file(text: str, body: str) -> str:
+    """The theory's definitions plus one ground goal, and nothing else.
+
+    Dropping the theory's own goals is what keeps every verdict here about one
+    task: no other goal can run first, fail, and leave the prover's state behind
+    for this goal's answer.
+    """
+    starts = [match.start() for match in DECLARATION.finditer(text)]
+    if not starts:
+        raise AuditError("theory declares no lemma or goal")
+    return text[:starts[0]] + "  goal witness: " + body + "\n\nend\n"
+
+
+def prove_goal(text: str, body: str, theory: str, label: str, when: str,
+               timelimit: int) -> bool:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / theory
+        path.write_text(witness_file(text, body))
+        output, status = run_why3(path, timelimit)
+    goals = parse_goals(output)
+    if goals != {"witness": goals.get("witness", False)}:
+        raise AuditError(
+            f"{theory}: mutation {label} -- the {when} run did not produce exactly "
+            f"one goal named witness, got {goals or 'none'} (why3 exit {status}); "
+            f"the witness does not parse against the theory"
+        )
+    return goals["witness"]
+
+
+def check_mutation(theory: str, label: str, edits: list[tuple[str, str]],
+                   claim: str, witness: str) -> str:
+    original = read_theory(theory)
+    mutant = original
+    for old, new in edits:
+        if mutant.count(old) == 0:
+            raise AuditError(
+                f"{theory}: mutation {label} no longer applies -- "
+                f"the theory was edited without the audit: {old.strip()!r}"
+            )
+        mutant = mutant.replace(old, new)
+
+    # The unmutated run only has to fail to prove the witness, and a witness it
+    # *could* prove is a ground fact (well under a second), so it is not given
+    # the mutant's budget: the `sat` search for a witness the theory forbids is
+    # what costs the time.
+    if prove_goal(original, witness, theory, label, "unmutated", 5):
+        raise AuditError(
+            f"{theory}: mutation {label} -- the unmutated theory proves the "
+            f"witness, so it refutes {claim} without the mutation and proves "
+            f"nothing about the guard (the theory itself would be wrong)"
+        )
+    if not prove_goal(mutant, witness, theory, label, "mutated", 30):
+        raise AuditError(
+            f"{theory}: mutation {label} SURVIVED -- the witness {witness!r} is "
+            f"not provable under the mutated rule, so the edit no longer changes "
+            f"behaviour (or no longer applies) and {claim} is not being tested"
+        )
+    return f"{claim} is refuted by a ground execution the unmutated rule forbids"
+
+
+
+def main() -> int:
+    if shutil.which("why3") is None:
+        print("[gap] D21 why3 theory audit (tooling absent: why3 not on PATH)")
+        return 0
+
+    try:
+        for name in TRUSTED_BASE:
+            base = audit_trusted_base(name, read_theory(name))
+            print(f"[pass] {name}: no axiom/parameter/val; trusted base {base}")
+        for theory, label, edits, claim, witness in MUTATIONS:
+            detail = check_mutation(theory, label, edits, claim, witness)
+            print(f"[pass] mutation {label} ({theory}): {detail}")
+    except AuditError as error:
+        print(f"FAIL: {error}")
+        return 1
+
+    version = subprocess.run(["why3", "--version"], capture_output=True, text=True)
+    why3_version = version.stdout.replace("Why3 platform, version ", "").strip()
+    print(
+        f"PASS: {len(TRUSTED_BASE)} theories audited, "
+        f"{len(MUTATIONS)}/{len(MUTATIONS)} guard mutations refuted by a witness "
+        f"(why3 {why3_version})"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
