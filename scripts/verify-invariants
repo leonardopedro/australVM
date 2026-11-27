@@ -195,33 +195,53 @@ fi
 if ! command -v why3 >/dev/null 2>&1; then
     gap "D21: symbolic proofs (tooling absent: why3 not on PATH)"
 else
-    _why3_gate() {
-        local name="$1" out
-        shift
-        if out=$("$@" 2>&1); then
-            check "$name" true
-        else
-            printf '%s\n' "$out"
-            check "$name" false
+    # `-P z3` resolves the prover through Why3's own configuration, and a fresh
+    # GitHub runner has never written one: every gate below then exits 1 with
+    # "No prover in ~/.why3.conf corresponds to \"z3\"", which reads like a
+    # broken proof instead of an unconfigured prover (measured 2026-11-27 on
+    # run 45964358573, where this section failed and took `make test`'s drift
+    # controls down with it). Detect the provers into a per-run config when z3
+    # is not registered -- WHY3CONFIG, so the caller's ~/.why3.conf is never
+    # rewritten -- and fall back to the explained gap if detection cannot find
+    # z3 either.
+    if ! why3 config list-provers 2>/dev/null | grep -qi '^Z3 '; then
+        _why3_cfg="$(mktemp -d)/why3.conf"
+        WHY3CONFIG="$_why3_cfg" why3 config detect >/dev/null 2>&1 || true
+        if WHY3CONFIG="$_why3_cfg" why3 config list-provers 2>/dev/null | grep -qi '^Z3 '; then
+            export WHY3CONFIG="$_why3_cfg"
         fi
-    }
-    _why3_gate "D21: epoch monotonicity proof (why3, 6 goals)" \
-        bash "$repo_root/scripts/check-why3-epoch"
-    _why3_gate "D21: fence invariant proof (why3, 15 goals)" \
-        bash "$repo_root/scripts/check-why3-fence"
-    _why3_gate "D21: request replay proof (why3, 22 goals)" \
-        bash "$repo_root/scripts/check-why3-replay"
-    # D21 step 3: what the theories are allowed to assume and whether their
-    # guards still carry the claims. Pins the trusted base (no axiom, parameter
-    # or val; exact `use` lists) and requires ten guard mutations -- the Rust
-    # model check's mutation vocabulary -- to be refuted by a ground witness
-    # that the unmutated theory forbids. It rewrites the theory texts, so it
-    # needs python3; absent python3 is its own explained gap, not a pass.
-    if command -v python3 >/dev/null 2>&1; then
-        _why3_gate "D21: theory audit (why3, trusted base + 10 guard mutations)" \
-            python3 "$repo_root/scripts/check-why3-audit"
+    fi
+    if ! why3 config list-provers 2>/dev/null | grep -qi '^Z3 '; then
+        gap "D21: symbolic proofs (tooling absent: z3 not configured for why3)"
     else
-        gap "D21: theory audit (tooling absent: python3 not on PATH)"
+        _why3_gate() {
+            local name="$1" out
+            shift
+            if out=$("$@" 2>&1); then
+                check "$name" true
+            else
+                printf '%s\n' "$out"
+                check "$name" false
+            fi
+        }
+        _why3_gate "D21: epoch monotonicity proof (why3, 6 goals)" \
+            bash "$repo_root/scripts/check-why3-epoch"
+        _why3_gate "D21: fence invariant proof (why3, 15 goals)" \
+            bash "$repo_root/scripts/check-why3-fence"
+        _why3_gate "D21: request replay proof (why3, 22 goals)" \
+            bash "$repo_root/scripts/check-why3-replay"
+        # D21 step 3: what the theories are allowed to assume and whether their
+        # guards still carry the claims. Pins the trusted base (no axiom, parameter
+        # or val; exact `use` lists) and requires ten guard mutations -- the Rust
+        # model check's mutation vocabulary -- to be refuted by a ground witness
+        # that the unmutated theory forbids. It rewrites the theory texts, so it
+        # needs python3; absent python3 is its own explained gap, not a pass.
+        if command -v python3 >/dev/null 2>&1; then
+            _why3_gate "D21: theory audit (why3, trusted base + 10 guard mutations)" \
+                python3 "$repo_root/scripts/check-why3-audit"
+        else
+            gap "D21: theory audit (tooling absent: python3 not on PATH)"
+        fi
     fi
 fi
 
