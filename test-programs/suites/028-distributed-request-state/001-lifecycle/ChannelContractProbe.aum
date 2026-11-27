@@ -1,0 +1,45 @@
+-- D19: acquire the host-checked live submission contract, ask for both markers,
+-- and release the opaque handle. A host that cannot build the contract returns
+-- a refusal instead of a handle.
+pragma Unsafe_Module;
+
+import ChannelContract (
+    acquire,
+    provesOrdered,
+    provesExactlyOnce,
+    release,
+    AcquireOutcome,
+    Acquired,
+    AcquireRefused,
+    LiveSubmissionContract
+);
+
+module body ChannelContractProbe is
+    function main(): ExitCode is
+        case acquire() of
+            when Acquired(contract: LiveSubmissionContract) do
+                let ordered: Int64 := provesOrdered(&contract);
+                let exactly_once: Int64 := provesExactlyOnce(&contract);
+                print("contract ordered=");
+                printLn(ordered);
+                print("contract exactly_once=");
+                printLn(exactly_once);
+                let status: Int64 := release(contract);
+                print("contract release=");
+                printLn(status);
+                if ordered = 1 then
+                    if exactly_once = 1 then
+                        return ExitSuccess();
+                    else
+                        return ExitFailure();
+                    end if;
+                else
+                    return ExitFailure();
+                end if;
+            when AcquireRefused(status: Int64) do
+                print("contract acquire=");
+                printLn(status);
+                return ExitFailure();
+        end case;
+    end;
+end module body.

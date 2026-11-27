@@ -31,16 +31,16 @@ module LiquidVCProbe
 
   (* --- verification conditions --- *)
 
-  (* g_6c6dad5c — §5.10 RETURN (assumes §5.6 APPLICATION) *)
-  goal g_6c6dad5c: forall n: int, __result: int. ((n >= 0 /\ (__result = (n)))) -> __result >= n
+  (* g_83a850b6 — §5.10 RETURN (assumes §5.6 APPLICATION) *)
+  goal g_83a850b6: forall n: int, __result: int. ((n >= 0 /\ (__result = (n)))) -> __result >= n
 
-  (* g_a78d16bb — §5.9 FOLD (result half; the step obligation needs §4.4) *)
-  goal g_a78d16bb: forall m: int, __result: int. ((m >= 0 /\ (__result = ((atLeast (m)))))) -> __result >= 0
+  (* g_e6ddfcb6 — §5.9 FOLD (result half; the step obligation needs §4.4) *)
+  goal g_e6ddfcb6: forall m: int, __result: int. ((m >= 0 /\ (__result = ((atLeast (m)))))) -> __result >= 0
 
-  (* g_cdeb395e — §5.10 RETURN (assumes §5.6 APPLICATION) *)
-  goal g_cdeb395e: forall m: int, __result: int. ((m >= 0 /\ (__result = ((atLeast (m)))))) -> __result >= 0
+  (* g_f01e8507 — §5.10 RETURN (assumes §5.6 APPLICATION) *)
+  goal g_f01e8507: forall m: int, __result: int. ((m >= 0 /\ (__result = ((atLeast (m)))))) -> __result >= 0
 
-  (* g_82de6a31 — §5.6 APPLICATION (the caller proves the callee's Requires) *)
-  goal g_82de6a31: forall m: int. (m >= 0) -> ((m >= 0))
+  (* g_87ede782 — §5.6 APPLICATION (the caller proves the callee's Requires) *)
+  goal g_87ede782: forall m: int. (m >= 0) -> ((m >= 0))
 
 end

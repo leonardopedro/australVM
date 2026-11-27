@@ -663,7 +663,7 @@ is a deliberate release artifact that goes stale whenever the bridge changes
       Outcomes are a four-way sum (`Proved` / `Refused goals` / `Unknown` /
       `NoEngine`) precisely because a missing prover must never read as a
       pass. Verified by hand against stub provers: exit 1 → `Refused`,
-      naming the goal `g_d3eedf6b`; exit 2 → `Unknown`; absent → skip, and a
+      naming the goal `g_83a850b6`; exit 2 → `Unknown`; absent → skip, and a
       hard error under `AUSTRAL_LIQUID_REQUIRED`.
       *Gaps:* the `module.toml` manifest is **L8** — required-ness comes from
       `AUSTRAL_LIQUID_REQUIRED` for now. `liquid.drv` (extraction) is not

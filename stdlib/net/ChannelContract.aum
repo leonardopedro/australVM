@@ -1,0 +1,53 @@
+-- D19: the Austral half of the host-checked channel contract.
+--
+-- The host builds `unfer_protocol::channel_contracts::consensus_live_submission_contract`
+-- and only then returns a handle. The probe verbs answer from that stored
+-- contract, so a caller cannot turn an `Int64` into a marker.
+
+pragma Unsafe_Module;
+
+module body ChannelContract is
+    pragma Foreign_Import(External_Name => "au_channel_acquire");
+    function au_channel_acquire(): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_channel_ordered");
+    function au_channel_ordered(contract: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_channel_exactly_once");
+    function au_channel_exactly_once(contract: Int64): Int64 is end;
+
+    pragma Foreign_Import(External_Name => "au_channel_release");
+    function au_channel_release(contract: Int64): Int64 is end;
+
+    record LiveSubmissionContract: Linear is
+        handle: Int64;
+    end;
+
+    function acquire(): AcquireOutcome is
+        let handle: Int64 := au_channel_acquire();
+        if handle > 0 then
+            return Acquired(contract => LiveSubmissionContract(handle => handle));
+        else
+            return AcquireRefused(status => handle);
+        end if;
+    end;
+
+    generic [R: Region]
+    function provesOrdered(
+        contract: &[LiveSubmissionContract, R]
+    ): Int64 is
+        return au_channel_ordered(contract->handle);
+    end;
+
+    generic [R: Region]
+    function provesExactlyOnce(
+        contract: &[LiveSubmissionContract, R]
+    ): Int64 is
+        return au_channel_exactly_once(contract->handle);
+    end;
+
+    function release(contract: LiveSubmissionContract): Int64 is
+        let { handle: Int64 } := contract;
+        return au_channel_release(handle);
+    end;
+end module body.

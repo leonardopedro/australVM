@@ -185,6 +185,33 @@ else
         python3 "$repo_root/scripts/check-distributed-contracts" --selftest
 fi
 
+# --- D21: the three claims, symbolically proved with Why3 -------------------
+# Each theory is discharged by Why3 with Z3 only, and each gate pins the goal
+# count (6 epoch, 15 fence, 22 replay) so a theory emptied of lemmas cannot pass
+# by proving nothing. Why3 is an optional toolchain here: when it is absent the
+# proofs are an explained gap, the same idiom as the other missing-toolchain
+# checks, and the gates themselves also report `[gap]` (exit 0), never a false
+# pass or a false failure. Output is only echoed when a goal fails.
+if ! command -v why3 >/dev/null 2>&1; then
+    gap "D21: symbolic proofs (tooling absent: why3 not on PATH)"
+else
+    _why3_gate() {
+        local name="$1" script="$2" out
+        if out=$(bash "$script" 2>&1); then
+            check "$name" true
+        else
+            printf '%s\n' "$out"
+            check "$name" false
+        fi
+    }
+    _why3_gate "D21: epoch monotonicity proof (why3, 6 goals)" \
+        "$repo_root/scripts/check-why3-epoch"
+    _why3_gate "D21: fence invariant proof (why3, 15 goals)" \
+        "$repo_root/scripts/check-why3-fence"
+    _why3_gate "D21: request replay proof (why3, 22 goals)" \
+        "$repo_root/scripts/check-why3-replay"
+fi
+
 # --- Phase D: the Lean4 -> DeltaNets -> MM0 certificate (docs/lean4mm0.md §5) ---
 #
 # gap_certificate.{mm0,mm1} and layout_certificate.{mm0,mm1} are generated
@@ -561,6 +588,31 @@ PY
             fi
         else
             gap "W7: flipped-coefficient certificate not re-checked (no mm0 toolchain)"
+        fi
+
+        # D20: the finite distributed request trace. The drift check does not
+        # need a toolchain; the verify half re-checks the certificate and the
+        # five mutated certificates, so the proof is load-bearing rather than
+        # merely regenerated from the same input.
+        if [ -x "$repo_root/scripts/distributed2mm0" ]; then
+            if "$repo_root/scripts/distributed2mm0" check \
+                    >"$_cert_tmp/distributed-check.log" 2>&1; then
+                check "D20: distributed trace certificate is in sync with its pinned trace" true
+            else
+                cat "$_cert_tmp/distributed-check.log" >&2
+                check "D20: distributed trace certificate is in sync with its pinned trace" false
+            fi
+            if command -v mm0-rs >/dev/null 2>&1 && command -v mm0-c >/dev/null 2>&1; then
+                if "$repo_root/scripts/distributed2mm0" verify \
+                        >"$_cert_tmp/distributed-verify.log" 2>&1; then
+                    check "D20: trace accepted and five mutants rejected by mm0-rs + mm0-c" true
+                else
+                    tail -5 "$_cert_tmp/distributed-verify.log" >&2
+                    check "D20: trace accepted and five mutants rejected by mm0-rs + mm0-c" false
+                fi
+            else
+                gap "D20: trace not re-checked (no mm0-rs/mm0-c on PATH)"
+            fi
         fi
 
         # W8: the ISA layer. Three separate things are checked, because the

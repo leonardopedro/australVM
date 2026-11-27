@@ -96,23 +96,99 @@ def tail_text(path: Path, limit: int = 8192) -> str:
         return ""
 
 
+# A rejected derivation is dumped in full, so the reader walks the stream and
+# stops at the verdict instead of holding the dump. `fail()` prints, in order,
+# `stmt: <offset>`, the command dump, a blank line, the verdict, and only then
+# the input echo. Only a URef dump can be large (it prints the whole expression
+# being unified on one line); 256 MiB of it is far past anything measured, and
+# the cap keeps a pathological one from stalling the sweep.
+MM0_C_READ_CAP = 1 << 28
+
+
+def mm0_c_verdict(err: Path, cap: int = MM0_C_READ_CAP) -> str:
+    """The line `mm0-c` printed as its decision, not what it dumped with it.
+
+    Two layouts, both measured from `verifier.c::fail()`:
+
+      stmt: <offset>\ncmd: <dump>\n[ucmd: <dump>\n]\n<verdict>\n\n<input echo>
+
+    or the verdict on its own when the checker failed before it had a statement
+    (`at %lX: 'thm' uses sorry`, `error: some theorems used sorry`, a parser
+    failure). In the first, the verdict is the line after the dump's blank line;
+    the dump is one line per command and a `URef` line is the expression being
+    unified, which on `.declQuotPB_at` alone ran past 8 KiB, so the boundary has
+    to be found in the stream rather than in a fixed-size prefix. Nothing after
+    the verdict is read: that is the echo, up to 4.5 GB on
+    `.TgtNodePres.kit._proof_1`.
+    """
+    try:
+        fh = open(err, "rb")
+    except OSError:
+        return ""
+    with fh:
+        buf = fh.read(1 << 16)
+        if not buf.startswith(b"stmt: "):
+            return buf.split(b"\n", 1)[0].decode("utf-8", "replace").strip()
+        read = len(buf)
+        while True:
+            cut = buf.find(b"\n\n")
+            if cut >= 0:
+                rest = buf[cut + 2:].split(b"\n", 1)[0]
+                if not rest and read < cap:
+                    rest = fh.readline().split(b"\n", 1)[0]
+                return rest.decode("utf-8", "replace").strip()
+            if read >= cap:
+                return ""
+            chunk = fh.read(1 << 20)
+            if not chunk:
+                return ""
+            read += len(chunk)
+            # A `\n\n` may straddle the chunk boundary; one byte carries it.
+            buf = buf[-1:] + chunk
+
+
 def mm0_c_reason(err: Path, out: Path) -> str:
     """What `mm0-c` decided, not the derivation it printed with the decision.
 
-    On rejection the checker prints its verdict and then the whole statement it
-    rejected, so the *last* line of its stderr is a fragment of that dump
-    (measured: 4.5 GB on `.TgtNodePres.kit._proof_1`). The verdict is the last
-    line *before* the `── the derivation ──` banner.
+    On rejection the checker prints its verdict and then the statement it
+    rejected, so neither end of its stderr is the verdict in general: it opens
+    with `stmt: <offset>` and closes with a fragment of the dump (measured:
+    `.declQuotPB_at` reported as `ucc (tsucc …`).
+    """
+    verdict = mm0_c_verdict(err)
+    if verdict:
+        return verdict
+    # Died before printing one (a signal, an empty stream). Its stdout is empty
+    # in every rejection measured, so the fallback says what it can and does not
+    # quote a dump fragment as if it were the checker's decision.
+    return last_meaningful(tail_text(out))
+
+def cgroup_mem_gb() -> float | None:
+    """This process's cgroup `memory.max`, when one is set and readable.
+
+    A row's own `RLIMIT_AS` is not always the bound that killed it: a cgroup
+    `MemoryMax` below that cap sends SIGKILL first, and then the bound the row
+    hit is the smaller of the two. The scan reads its own limit so the label
+    names the bound that really applied instead of the one it configured.
     """
     try:
-        with open(err, "r", errors="replace") as fh:
-            head = fh.read(8192)
-    except OSError:
-        head = ""
-    verdict = re.split(r"\n-+ ──", head)[0]
-    if verdict.strip():
-        return last_meaningful(verdict)
-    return last_meaningful(tail_text(err) + tail_text(out))
+        rel = next(line.split(":", 2)[2]
+                   for line in Path("/proc/self/cgroup").read_text().splitlines()
+                   if line.startswith("0::"))
+        text = (Path("/sys/fs/cgroup") / rel.lstrip("/") / "memory.max").read_text().strip()
+        return None if text == "max" else int(text) / (1 << 30)
+    except (StopIteration, OSError, ValueError):
+        return None
+
+
+CGROUP_GB = cgroup_mem_gb()
+
+
+def bound_gb(cap: int) -> str:
+    """The bound a child in this process's cgroup can actually reach."""
+    v = cap if CGROUP_GB is None else min(cap, CGROUP_GB)
+    return str(int(v)) if float(v).is_integer() else f"{v:.1f}"
+
 
 def classify(reason: str) -> str:
     """One bucket per kind of missing support, keyed on the deriver's own words."""
@@ -129,6 +205,12 @@ def classify(reason: str) -> str:
         # derivation it rejects this way is a size its verifier cannot hold, and
         # it dumps the derivation (gigabytes) before exiting.
         (r"heap overflow", "over the checker's own heap"),
+        (r"store overflow", "over the checker's own store"),
+        # The scan's own budgets, named as the log names them: a row that hit one
+        # is measured, not rejected, and the two are kept apart because only the
+        # time budget is a statement about size.
+        (r"over [\d.]+ GiB", "over the memory bound"),
+        (r"over \d+ s\b", "over the time bound"),
         (r"MemoryError|memory", "out of memory"),
     ):
         if re.search(pat, reason, re.I):
@@ -157,6 +239,11 @@ MM0_RS_MEM_GB = int(os.environ.get("SCAN_MM0_RS_MEM_GB", "10"))
 # more than 3.9 GB in ten minutes), so a rejected giant can run for as long as
 # its trace takes to write. Budget it, and overridable like the others.
 MM0_C_TIMEOUT = int(os.environ.get("SCAN_MM0_C_TIMEOUT", "900"))
+# Which checker, by path. Inside `nix develop` the PATH `mm0-c` is the nixpkgs
+# package, so a checker rebuilt from `../mm0-rs` (the heap repair in §13.62j) is
+# unreachable by name no matter where it is installed; a rebuild that the sweep
+# silently does not use is worse than no rebuild at all.
+MM0_C = os.environ.get("SCAN_MM0_C", "mm0-c")
 
 
 # ── the ledger of proved statements ──────────────────────────────────────────
@@ -173,9 +260,13 @@ MM0_C_TIMEOUT = int(os.environ.get("SCAN_MM0_C_TIMEOUT", "900"))
 # the source export and counts the rules of the derivation that is being
 # discarded. Two things that state the same thing hash the same; two things that
 # were merely proved the same way do not.
+# `verdict` and `reason` are appended, not inserted: a row written by a scan
+# that predates them still lines up, and `ledger_read` pads it to `""` — which
+# reads as a pass, because until these columns existed every row was one.
 LEDGER_COLUMNS = ("export", "theory", "mode", "declaration", "kind", "rules",
                   "assumptions", "statement_bytes", "statement_sha256",
-                  "derivation_sha256", "derivation_bytes", "verified_at")
+                  "derivation_sha256", "derivation_bytes", "verified_at",
+                  "verdict", "reason")
 GOAL_MARK = "-- ── the derivation ──\n"
 # The same marker in a retained statement: `statement_of_text` relabels it, and
 # the band below it is byte-for-byte the one `GOAL_MARK` introduces.
@@ -209,6 +300,23 @@ def ledger_read(root: Path) -> dict[tuple[str, str, str, str], dict[str, str]]:
         out[(row["export"], row["theory"], row["mode"],
              row["declaration"])] = row
     return out
+
+
+def proved(row: dict[str, str]) -> bool:
+    """Whether a row is a verification, not a recorded failure.
+
+    Memo lookups must answer `proved` only: a failure row is a measurement of a
+    bound, and treating it as a hit would skip the declaration and hide the fix
+    that would have closed it.
+    """
+    return row["verdict"] in ("", "pass")
+
+
+def by_statement_index(ledger: dict[tuple[str, str, str, str], dict[str, str]],
+                       theory_sha: str) -> dict[str, dict[str, str]]:
+    """The statement-digest index over one theory, proved rows only."""
+    return {r["statement_sha256"]: r for r in ledger.values()
+            if r["theory"] == theory_sha and r["statement_sha256"] and proved(r)}
 
 
 def statement_digest(text: str) -> str:
@@ -252,6 +360,35 @@ def statement_of_text(text: str) -> str:
     return head + state + goal
 
 
+def ledger_append_failure(root: Path, export_tag: str, theory_sha: str,
+                          mode: str, name: str, kind: str, reason: str) -> None:
+    """Record that a declaration was measured and did not close.
+
+    No statement is retained: a failure's artifact is the sweep's work
+    directory, and the row exists to say *when* and *how* the declaration was
+    measured. `reason` is what the checker said, bound included (`mm0-rs: over
+    10 GiB`), so a later run can tell a fixed bound from a real rejection.
+    """
+    # A run where nothing closed never created the ledger directory, and a
+    # failure row is the only thing it has to write.
+    root.mkdir(parents=True, exist_ok=True)
+    index = root / "index.tsv"
+    fresh = not index.exists()
+    with index.open("a") as fh:
+        if fresh:
+            fh.write("# " + "\t".join(LEDGER_COLUMNS) + "\n")
+        row = dict.fromkeys(LEDGER_COLUMNS, "")
+        row.update(export=export_tag, theory=theory_sha, mode=mode,
+                   declaration=name, kind=kind, rules="0", assumptions="0")
+        row.update(verdict="failed", reason=one_line(reason),
+                   verified_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
+        fh.write("\t".join(row[col] for col in LEDGER_COLUMNS) + "\n")
+
+
+def one_line(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def ledger_append(root: Path, full0_text: str, export_tag: str, theory_sha: str,
                   mode: str, name: str, kind: str, rules: int, axs: int,
                   deriv_sha: str, deriv_bytes: int) -> Path:
@@ -278,7 +415,7 @@ def ledger_append(root: Path, full0_text: str, export_tag: str, theory_sha: str,
         fh.write("\t".join(str(v) for v in (
             export_tag, theory_sha, mode, name, kind, rules, axs,
             path.stat().st_size, digest, deriv_sha, deriv_bytes,
-            time.strftime("%Y-%m-%dT%H:%M:%S"))) + "\n")
+            time.strftime("%Y-%m-%dT%H:%M:%S"), "pass", "")) + "\n")
     return path
 
 
@@ -300,8 +437,13 @@ def ledger_rekey(root: Path) -> int:
     out: list[str] = []
     rows = changed = missing = 0
     for line in index.read_text().splitlines():
-        if not line or line.startswith("#"):
-            out.append(line)
+        if not line:
+            continue
+        if line.startswith("#"):
+            # The repair rewrites the rows to the current column set, so the
+            # header has to name it: a header one column short would describe
+            # neither the rows beside it nor the ones about to be appended.
+            out.append("# " + "\t".join(LEDGER_COLUMNS))
             continue
         fields = line.split("\t")
         row = dict(zip(LEDGER_COLUMNS, fields))
@@ -318,12 +460,12 @@ def ledger_rekey(root: Path) -> int:
                     if p.exists()), None)
         if src is None:
             missing += 1
-            out.append(line)
+            out.append("\t".join(row[col] for col in LEDGER_COLUMNS))
             continue
         text = src.read_text()
         if STATED_MARK not in text:
             missing += 1
-            out.append(line)
+            out.append("\t".join(row[col] for col in LEDGER_COLUMNS))
             continue
         digest = hashlib.sha256(text.split(STATED_MARK, 1)[1].encode()).hexdigest()
         if digest != row["statement_sha256"]:
@@ -354,12 +496,12 @@ def reread_ok(full0: Path, full1: Path, mmb: Path) -> str | None:
                 timeout=MM0_RS_TIMEOUT, preexec_fn=cap_mem(MM0_RS_MEM_GB))
     except subprocess.TimeoutExpired:
         return f"mm0-rs: over {MM0_RS_TIMEOUT} s"
-    if c.returncode == -6 or "memory allocation" in (c.stdout + c.stderr):
-        return f"mm0-rs: over {MM0_RS_MEM_GB} GiB"
+    if c.returncode in (-6, -9) or "memory allocation" in (c.stdout + c.stderr):
+        return f"mm0-rs: over {bound_gb(MM0_RS_MEM_GB)} GiB"
     if c.returncode != 0 or "sorry" in (c.stdout + c.stderr):
         return "mm0-rs: " + last_meaningful(c.stdout + c.stderr)
     with full0.open() as fh:
-        k = run(["mm0-c", str(mmb)], stdin=fh)
+        k = run([MM0_C, str(mmb)], stdin=fh)
     mmb.unlink(missing_ok=True)
     if k.returncode != 0:
         return "mm0-c: " + last_meaningful(k.stdout + k.stderr)
@@ -568,6 +710,11 @@ def main() -> int:
     # the work directory is what a scan rebuilds, and re-verifying what was
     # already verified is the cost the ledger exists to remove.
     keep_proofs = "--keep-proofs" in sys.argv
+    # `--record-failures`: a declaration that did not close gets a `failed` row
+    # saying what measured it and what said so. Off by default, because a
+    # failed row is not a hit and the declaration is measured again next run —
+    # which is the point after a fix, and a 10 GiB row costs minutes.
+    record_failures = "--record-failures" in sys.argv
     # `--only=FILE`: restrict the scope to names listed one per line. A chapter
     # export carries its whole dependency closure, in which the chapter's own
     # declarations are a few dozen out of tens of thousands, so a sample drawn
@@ -666,6 +813,8 @@ def main() -> int:
 
     closed: list[tuple[str, str, int, int]] = []
     failed: list[tuple[str, str]] = []
+    # `short` is `nm` minus the prefix, so this is one name per declaration.
+    names = {nm[len(prefix):]: (nm, kind) for nm, kind in scope}
     remembered = 0
     by_statement = 0
     t0 = time.time()
@@ -675,10 +824,9 @@ def main() -> int:
     # on a declaration some ledger row already knows: a plain re-run of one
     # export never pays for it, a re-export pays for it once per declaration and
     # gets the verification for free when the statement is the same bytes.
-    content = {r["statement_sha256"]: r for r in (ledger or {}).values()
-               if r["theory"] == theory_sha and r["statement_sha256"]}
-    known_names = {n for (_e, t, _m, n) in (ledger or {})
-                   if t == theory_sha and n.startswith(prefix)}
+    content = by_statement_index(ledger or {}, theory_sha)
+    known_names = {n for (_e, t, _m, n), r in (ledger or {}).items()
+                   if t == theory_sha and n.startswith(prefix) and proved(r)}
 
     for nm, kind in scope:
         short = nm[len(prefix):] if nm.startswith(prefix) else nm
@@ -686,7 +834,7 @@ def main() -> int:
         # ledger, and the derivation that got it there is gone. Nothing is
         # emitted and neither checker runs.
         row = ledger.get((ex.sha256, theory_sha, mode_tag, nm)) if ledger else None
-        if row is not None and row["kind"] == kind:
+        if row is not None and row["kind"] == kind and proved(row):
             remembered += 1
             closed.append((short, kind, int(row["rules"]), int(row["assumptions"])))
             print(f"  memo  ✓ {short} [{kind}] rules={row['rules']} "
@@ -722,9 +870,12 @@ def main() -> int:
             print(f"  emit  ⏱ {short}: over {EMIT_TIMEOUT} s")
             continue
         if r.returncode != 0:
-            if r.returncode == -6 or "MemoryError" in (r.stdout + r.stderr):
-                failed.append((short, f"emit: over {EMIT_MEM_GB} GiB"))
-                print(f"  emit  ✗ {short}: over {EMIT_MEM_GB} GiB")
+            # `-6` is the row's own `RLIMIT_AS` refusing an allocation; `-9` is
+            # a SIGKILL, which is what a cgroup's `MemoryMax` sends. Both are
+            # the bound, and neither is a statement about the derivation.
+            if r.returncode in (-6, -9) or "MemoryError" in (r.stdout + r.stderr):
+                failed.append((short, f"emit: over {bound_gb(EMIT_MEM_GB)} GiB"))
+                print(f"  emit  ✗ {short}: over {bound_gb(EMIT_MEM_GB)} GiB")
             else:
                 failed.append((short, last_meaningful(r.stdout + r.stderr)))
                 print(f"  emit  ✗ {short}: {failed[-1][1][:110]}")
@@ -750,9 +901,9 @@ def main() -> int:
             failed.append((short, f"mm0-rs: over {MM0_RS_TIMEOUT} s"))
             print(f"  mm0-rs ⏱ {short}: over {MM0_RS_TIMEOUT} s")
             continue
-        if c.returncode == -6 or "memory allocation" in (c.stdout + c.stderr):
-            failed.append((short, f"mm0-rs: over {MM0_RS_MEM_GB} GiB"))
-            print(f"  mm0-rs ✗ {short}: over {MM0_RS_MEM_GB} GiB")
+        if c.returncode in (-6, -9) or "memory allocation" in (c.stdout + c.stderr):
+            failed.append((short, f"mm0-rs: over {bound_gb(MM0_RS_MEM_GB)} GiB"))
+            print(f"  mm0-rs ✗ {short}: over {bound_gb(MM0_RS_MEM_GB)} GiB")
             continue
         if c.returncode != 0 or "sorry" in (c.stdout + c.stderr):
             failed.append((short, "mm0-rs: " + last_meaningful(c.stdout + c.stderr)))
@@ -767,7 +918,7 @@ def main() -> int:
         try:
             try:
                 with open(full0) as fh0, open(log0, "w") as fo, open(log1, "w") as fe:
-                    k = run(["mm0-c", str(out / "full.mmb")], stdin=fh0,
+                    k = run([MM0_C, str(out / "full.mmb")], stdin=fh0,
                             stdout=fo, stderr=fe, timeout=MM0_C_TIMEOUT)
             finally:
                 # The transcript is evidence only until the reason is read out
@@ -808,6 +959,14 @@ def main() -> int:
         print(f"  pass  ✓ {short} [{kind}] rules={rules} assumptions={axs}{discarded}")
 
     print()
+    if record_failures and memo_root is not None and ledger is not None:
+        for short, reason in failed:
+            if short not in names:
+                continue
+            nm, kind = names[short]
+            ledger_append_failure(memo_root, ex.sha256, theory_sha, mode_tag, nm,
+                                  kind, reason)
+        print(f"failures recorded  : {len(failed)} rows marked `failed`")
     print(f"verified closures : {len(closed)}/{len(scope)}")
     if remembered:
         print(f"memo hits         : {remembered} (not emitted, not re-checked:"

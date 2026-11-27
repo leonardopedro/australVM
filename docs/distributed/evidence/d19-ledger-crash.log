@@ -1,0 +1,13 @@
+$ cargo test -p unfer_consensus --features network --lib -- net::tests::a_crash_mid_publish net::tests::ledger_publish_crash_child
+warning: `unfer_consensus` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (target/debug/deps/unfer_consensus-f08e0e7f2bbbcdf2)
+
+running 2 tests
+test net::tests::ledger_publish_crash_child ... ok
+
+running 1 test
+test net::tests::ledger_publish_crash_child ... test net::tests::a_crash_mid_publish_keeps_the_committed_state_and_its_watermark ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 189 filtered out; finished in 0.30s
+

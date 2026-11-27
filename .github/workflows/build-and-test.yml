@@ -14,18 +14,26 @@ on:
 env:
   CARGO_FLAGS: ""
 
-# One run per tree, newest wins. Without this, every push that lands while a
-# previous `Build and Test` is still going starts a second run beside it, and
-# the long jobs (both build the bridge from source on a 2-core runner) then
-# contend for the same runners: measured 2026-11-24, three runs on `master`
-# (08:34, 08:48, 09:07) were in flight together, and `nix-pkg`'s `make bridge`
-# step took 24.9 min where the same step took 17.6 min on a quiet branch — which
-# is what pushed it past its timeout. Cancelling the superseded run is correct
-# here: the verdict that matters is the newest commit's, and a `cancelled` job
-# carries no verdict about the tree (see `docs/data/gate/README.md`).
+# One run per tree, so the long jobs (both build the bridge from source on a
+# 2-core runner) never compete with a copy of themselves: measured 2026-11-24,
+# three runs on `master` (08:34, 08:48, 09:07) were in flight together, and
+# `nix-pkg`'s `make bridge` step took 24.9 min where the same step took 17.6 min
+# on a quiet branch — which is what pushed it past its timeout.
+#
+# PRs cancel their superseded run: the verdict that matters is the newest
+# commit's, and a `cancelled` job carries no verdict about the tree (see
+# `docs/data/gate/README.md`).
+#
+# `master` queues instead (measured 2026-11-25/26: 53 of the last 60 master push
+# runs were `cancelled`, 4 succeeded, and the green runs needed an 80–99 minute
+# window). A full run takes ~80 min, so cancelling on master's push cadence
+# kills every run before `jit-stack`/`nix-pkg` finish and the branch never gets a
+# verdict. GitHub keeps at most one *pending* run per group, so a newer push
+# still drops an intermediate pending one — what changes is that a run already
+# in flight is never killed, so master gets a completed verdict per window.
 concurrency:
   group: build-and-test-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # ── Upstream OCaml CI, migrated from nix-shell (23.05) to the flake ─
@@ -85,8 +93,11 @@ jobs:
       # The default run compiles `DEFAULT_SUITES`, and the collector refuses a
       # suite directory that list does not name. This is the unit test for that
       # rule (scratch directories, no compiler), so a guard that stopped firing
-      # is a red step rather than a quietly shortened default run.
-      - name: runner suite list is honest
+      # is a red step rather than a quietly shortened default run. It also holds
+      # every `source-copy.txt` fixture to the modules its `examples/` origin
+      # declares, so a dropped module is named here rather than only inside a
+      # later compiled run.
+      - name: runner suite list and copy fixtures are honest
         run: nix develop -c bash -c 'python3 test-programs/test_runner.py'
 
       # The `austral` binary has no rpath, so every step that runs it needs
@@ -218,9 +229,11 @@ jobs:
       - name: Cache cranelift / unfer_ffi build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # actions/cache@v4
         with:
+          # No `../unfer/target` entry: since module_builder no longer builds
+          # in this job, nothing writes that directory (the bridge compiles
+          # unfer_ffi into its own `target/` as a path dependency).
           path: |
             ${{ github.workspace }}/safestos/cranelift/target
-            ${{ github.workspace }}/../unfer/target
           key: jit-${{ runner.os }}-${{ hashFiles('safestos/cranelift/Cargo.lock', 'safestos/cranelift/**/*.rs', 'safestos/cranelift/Cargo.toml') }}
           restore-keys: |
             jit-${{ runner.os }}-
@@ -269,8 +282,17 @@ jobs:
       # LD_LIBRARY_PATH points at the bridge .so's build dir (the ci.yml
       # pattern): $HOME/.local/lib does not exist on a fresh runner and the
       # silent cp fallback made these steps fail to load the bridge.
+      #
+      # `make all`, not `make bridge`: step 9 already built the release bridge
+      # with this same feature set, and the OCaml side only needs those
+      # artifacts to exist. The two cargo runs do not share work — the runner's
+      # rustup toolchain is 1.99.0 (rust-toolchain.toml) while the devshell
+      # carries 1.99.1, so building inside the shell recompiled every
+      # dependency (~10 min) and the next host-side step then recompiled them
+      # back. `check-bridge-fresh` is still an order-only prerequisite, so a
+      # stale `.so` is refused here instead of linked silently.
       - name: Build OCaml compiler with JIT bridge
-        run: nix develop -c bash -c 'make bridge && export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; dune build bin/ lib/ test/'
+        run: nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; make all && dune build bin/ lib/ test/'
 
       - name: Run OCaml JIT unit tests (JitTest)
         run: nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; dune runtest'
@@ -281,13 +303,24 @@ jobs:
         # forced to actually execute — a regression fails the job loudly.
         run: nix develop -c bash -c 'export LD_LIBRARY_PATH=$PWD/safestos/cranelift/target/release; dune exec --force test/CliEngineTest.exe && dune exec --force test/JitTest.exe'
 
+      # Step 9's `-p austral_cranelift_bridge` build already produces the bin;
+      # this keeps the demo's dependency (modhost, used for the UK-4001
+      # answer) explicit and fails here rather than inside the demo step if it
+      # ever stops being built.
       - name: Build modhost
         run: cargo build --release --features unfer-kernel --bin modhost
         working-directory: safestos/cranelift
 
-      - name: Build unfer_ffi (release, for demo_module)
-        run: cargo build --release -p unfer_ffi
-        working-directory: ${{ github.workspace }}/../unfer
+      # The demo step does not build (MODULE_BUILDER_SKIP_BUILD below), so the
+      # one configuration only it used to compile — the bridge with
+      # `--no-default-features --features unfer-kernel` — is checked here.
+      # `check` still fails on a feature-gated compile error, which is what
+      # that configuration can break in; it does not pay for a second
+      # codegen + link of the bridge, and it writes no `.so`, so the artifacts
+      # the demo loads are the ones steps 9/18 produced.
+      - name: Check the demo feature set still compiles
+        run: cargo check --release --no-default-features --features unfer-kernel -p austral_cranelift_bridge
+        working-directory: safestos/cranelift
 
       - name: Run demo_module positive + UK-4001 gate test
         # The B6-era inline invocation drifted from the fork's current JIT: it
@@ -295,8 +328,18 @@ jobs:
         # kernelModelCreateStr could never resolve) and grepped an obsolete
         # output pattern. The canonical, maintained driver is
         # unfer/tools/module_builder (also used by run_demo.sh) — invoke it so
-        # this gate cannot drift from the driver's logic again. It rebuilds
-        # the bridge with its own feature set, so it is self-contained.
+        # this gate cannot drift from the driver's logic again.
+        #
+        # MODULE_BUILDER_SKIP_BUILD=1: the driver's own build (`unfer_ffi`, then
+        # the bridge + modhost with --no-default-features, then concat/dune)
+        # duplicated what this job already has, inside the devshell's 1.99.1
+        # toolchain and so recompiling all of it. Everything it needs is in
+        # place: `austral.exe` from the OCaml build, and
+        # `libaustral_cranelift_bridge.so` + `modhost` from steps 9/18. The
+        # demo therefore runs against the default-feature
+        # build; the demo-only feature set is held to a compile check above.
+        env:
+          MODULE_BUILDER_SKIP_BUILD: "1"
         run: nix develop -c bash ${{ github.workspace }}/../unfer/tools/module_builder run ${{ github.workspace }}/../unfer/demo_module --deny uk_event_probability
 
   # ── avm-pkg engine (safestos/pkg) ─────────────────────────────────
@@ -327,9 +370,31 @@ jobs:
           restore-keys: |
             avm-pkg-${{ runner.os }}-
 
-      - name: Run avm-pkg tests (130 passed / 6 ignored, 7 binaries, measured 2026-11-18)
-        run: cargo test --workspace
+      # The log of a failed step needs admin rights, so the per-binary split is
+      # reported as annotations, which the run page shows on its own: one line
+      # per test binary (name + passed/failed/ignored) plus, on failure, the
+      # lines the census does not already carry (`failures:`, the test names,
+      # the `error:` line) — not the `Compiling`/`Running`/`test result:` lines
+      # it repeats, since GitHub shows ten annotations per step. A compile
+      # error leaves no `test result:` line, so the census
+      # says that instead of printing nothing. The census itself is
+      # `scripts/avm-test-census`, so its failure path (`::error` level, the
+      # tail annotations, the compile-failure line) has a fixture in the repo and
+      # the `selftest` below runs in the job that depends on it. The expected
+      # annotation lines are `scripts/avm-test-census.golden`, diffed byte for
+      # byte, so the text a reader will see is reviewable here.
+      - name: Run avm-pkg tests (142 passed / 6 ignored, 7 binaries, measured 2026-11-26)
         working-directory: safestos/pkg
+        run: |
+          # `pipefail` is load-bearing: without it `tee`'s 0 would report a
+          # failing `cargo test` as a green step.
+          set -o pipefail
+          bash "$GITHUB_WORKSPACE/scripts/avm-test-census" selftest
+          log="$RUNNER_TEMP/avm-pkg-tests.log"
+          status=0
+          cargo test --workspace 2>&1 | tee "$log" || status=$?
+          # Exits with cargo's status, so the step still fails on a red suite.
+          bash "$GITHUB_WORKSPACE/scripts/avm-test-census" --status "$status" "$log"
 
       # The two §3 hot-store rows as a smoke, on a release binary because a
       # debug build's per-call overhead would measure the wrong thing: a
@@ -346,30 +411,25 @@ jobs:
       # rows' own predicate stays unit-tested in avm-cli
       # (`latency_regression`), so this job's runner choice cannot hide a
       # broken predicate.
+      #
+      # The reporting half is `scripts/avm-hot-bench-report`: it prints the
+      # report, quotes its tail as `::error` on an enforced miss (a regression
+      # still has to arrive with its number, and the job log needs admin
+      # rights) or as a `::warning` plus the `[gap]` line on a hosted runner.
+      # Its `selftest` runs first and pins all three paths and both ways of
+      # selecting them, diffing each against
+      # `scripts/avm-hot-bench-report.golden` byte for byte.
       - name: Hot-store latency smoke (acquire < 1 µs, 50 MiB fault-in < 15 ms)
         run: |
+          bash "$GITHUB_WORKSPACE/scripts/avm-hot-bench-report" selftest
           cargo build --release -p avm-cli
           status=0
-          out=$(./target/release/avm-pkg hot-bench --require 2>&1) || status=$?
-          printf '%s\n' "$out"
-          if [ "$status" -eq 0 ]; then
-            exit 0
-          fi
-          # A regression still has to arrive with its number: the report is in
-          # the job log, which needs admin rights, so quote its tail either way.
-          if [ "${AVM_LATENCY_REFERENCE:-0}" = "1" ]; then
-            printf '%s\n' "$out" | tail -3 | while IFS= read -r line; do
-              echo "::error title=hot-bench::$line"
-            done
-            exit "$status"
-          fi
-          printf '%s\n' "$out" | tail -3 | while IFS= read -r line; do
-            echo "::warning title=hot-store latency (not enforced on this runner)::$line"
-          done
-          echo "[gap] hot-store latency rows measured, not enforced here" \
-            "(hosted runner; set AVM_LATENCY_REFERENCE=1 on a reference machine):"
-          printf '%s\n' "$out" | tail -1
-          exit 0
+          report=$(mktemp)
+          ./target/release/avm-pkg hot-bench --require > "$report" 2>&1 || status=$?
+          bash "$GITHUB_WORKSPACE/scripts/avm-hot-bench-report" --status "$status" "$report"
+          rc=$?
+          rm -f "$report"
+          exit "$rc"
         working-directory: safestos/pkg
 
   # ── Nix → AustralVM translations end to end (examples/nix-pkg) ─────

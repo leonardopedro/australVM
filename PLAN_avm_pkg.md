@@ -97,8 +97,9 @@ the totality pass shipped as a flat `lib/Totality.ml` — see §2 and §4.8.
 | Capability gating (`EPERM` w/o `NetworkCap`) | blocked at type + OS level | **live build path**: `build --policy` on a policy that does not permit `Execute` exits 1 with `EPERM: capability denied for action Execute` and no builder process exists (a marker-writing stand-in compiler never runs; nothing is recorded in the store); the permit control reaches the compiler, so the refusal is Cedar's. A permitted build's compiler runs in the granted namespaces, where an outbound connect finds no route (`sandboxed_child_cannot_reach_outside`). **Live load path**: `avm-pkg load --policy` asks `Execute`, then one `Call:<symbol>` per declared import, against the cell's own table — a cell that may run but may not call `au_alloc` exits 1 with `EPERM: capability denied for action "Call:au_alloc"` before relocation, and the permit control links the image and runs it through the runner | pass (both paths; the loader's executor is named by the caller, §4.14) |
 | Language totality | 100 % of unbounded constructs rejected at compile time | **pass for the shipped v1 rule set** (while / call cycles / foreign, embed, fptr): rejected at compile time under `--pkg-totality=true` — red probe `BadDrv.aum` (`rule 1`) leaves `rotten` absent from plan.json, control without the flag compiles and records `unproven` | pass |
 
-Suite: `cargo test --workspace` → **141 passed, 0 failed, 6 ignored**, exit 0
-(2026-11-21 re-run on this checkout; the 2026-11-18 run recorded 137 with
+Suite: `cargo test --workspace` → **142 passed, 0 failed, 6 ignored**, exit 0
+(2026-11-26 re-run on this checkout; avm-vmm gained the `EINTR` retry test.
+The 2026-11-21 re-run recorded 141; the 2026-11-18 run recorded 137 with
 the same six ignored — avm-cli gained one test and avm-exec three. Per
 crate: avm-cas 31 + the `bootstrap_recipes` binary (1
 passed, 1 ignored), avm-cli 23, avm-eval 22, avm-exec 17, avm-virtio 19,
@@ -225,7 +226,7 @@ Reproduce every number:
 ```sh
 ./examples/nix-pkg/run.sh          # Nix→AustralVM pairs: verify, package, execute
 cd safestos/pkg
-cargo test --workspace                                            # 141 passed / 6 ignored
+cargo test --workspace                                            # 142 passed / 6 ignored
 AVM_HOT_DIR=/dev/shm CARGO_NET_OFFLINE=true \
   cargo test --workspace --release -- --ignored --test-threads=1  # all heavy/timing acceptances (hot-store ×4 + warm-eval + bootstrap payloads)
 cargo test -p avm-cas  --release minor_edit   -- --nocapture      # 98.8 % dedup
@@ -249,8 +250,9 @@ develop "git+file://$PWD#ocaml"`) and the release bridge still
 `check-bridge-fresh`-clean. Results, all measured rather than carried
 forward:
 
-* `cargo test --workspace` — **141 passed, 6 ignored, 0 failed**
-  (31 + 1 + 23 + 22 + 17 + 19 + 28), unchanged.
+* `cargo test --workspace` — **142 passed, 6 ignored, 0 failed**
+  (31 + 1 + 23 + 22 + 17 + 19 + 29); avm-vmm gained the `EINTR` retry test on
+  2026-11-26.
 * `hot-bench --require` — exit 0, `acquire_mean_ns` **30.98** (0 evictions,
   `acquire_under_1us: true`), `fault_in_median_ms` **6.4867**
   (`fault_in_under_15ms: true`), inside the 30–51 ns and 6.5 ms rows.
@@ -827,7 +829,7 @@ No separate workflow was added (the spec adds none), but the existing
 `examples/nix-pkg/run.sh` against a bridge build (verify → package →
 round-trip → execute; §4.16) and an `avm-pkg` job — added after cross-project
 review round 4 found the engine's unit tests green and run by nobody. It
-runs `cargo test --workspace` (141 passed / 6 ignored, 7 binaries) and,
+runs `cargo test --workspace` (142 passed / 6 ignored, 7 binaries) and,
 since 2026-11-18, the two §3 hot-store rows as a smoke:
 `avm-pkg hot-bench --require` on a release build, which exits non-zero when
 either row regresses and attaches the measured report. Everything else in

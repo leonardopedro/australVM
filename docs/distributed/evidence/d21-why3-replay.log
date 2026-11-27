@@ -1,0 +1,92 @@
+$ why3 --version
+Why3 platform, version 1.8.2
+
+$ scripts/check-why3-replay
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 181, character 4 to line 184, character 50:
+Goal replay_is_the_recorded_outcome.
+Prover result is: Valid (0.01s, 8884 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 187, character 4 to line 190, character 55:
+Goal equivocation_is_a_conflict.
+Prover result is: Valid (0.01s, 10350 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 195, character 4 to line 197, character 53:
+Goal below_floor_is_refused.
+Prover result is: Valid (0.01s, 11848 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 200, character 4 to line 203, character 53:
+Goal record_window.
+Prover result is: Valid (0.01s, 17876 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 206, character 4 to line 209, character 68:
+Goal recorded_window_is_set_entry.
+Prover result is: Valid (0.01s, 16921 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 212, character 4 to line 214, character 60:
+Goal recorded_window_floor.
+Prover result is: Valid (0.01s, 20265 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 217, character 4 to line 220, character 57:
+Goal recorded_window_lookup.
+Prover result is: Valid (0.03s, 38739 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 223, character 4 to line 228, character 82:
+Goal record_then_admit_is_duplicate.
+Prover result is: Valid (0.01s, 18848 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 233, character 4 to line 234, character 63:
+Goal fresh_means_absent.
+Prover result is: Valid (0.02s, 46422 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 237, character 4 to line 238, character 71:
+Goal fresh_respects_capacity.
+Prover result is: Valid (0.01s, 27333 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 241, character 4 to line 243, character 33:
+Goal fresh_respects_incarnations.
+Prover result is: Valid (0.00s, 20838 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 248, character 4 to line 251, character 61:
+Goal record_counts_a_new_entry_once.
+Prover result is: Valid (0.01s, 23916 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 254, character 4 to line 257, character 57:
+Goal record_does_not_count_an_existing_entry.
+Prover result is: Valid (0.02s, 31381 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 262, character 4 to line 264, character 28:
+Goal settle_without_a_record_changes_nothing.
+Prover result is: Valid (0.02s, 31432 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 267, character 4 to line 269, character 48:
+Goal settle_window_exists.
+Prover result is: Valid (0.02s, 25935 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 272, character 4 to line 275, character 49:
+Goal settle_lookup.
+Prover result is: Valid (0.02s, 31854 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 278, character 4 to line 281, character 24:
+Goal settle_keeps_the_floor.
+Prover result is: Valid (0.02s, 34695 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 284, character 4 to line 289, character 63:
+Goal settle_keeps_the_digest.
+Prover result is: Valid (0.02s, 33259 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 294, character 4 to line 296, character 61:
+Goal record_leaves_another_incarnation_alone.
+Prover result is: Valid (0.02s, 44262 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 299, character 4 to line 305, character 34:
+Goal another_incarnation_cannot_answer_a_retry.
+Prover result is: Valid (0.01s, 29944 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 310, character 4 to line 313, character 48:
+Goal acknowledge_raises_the_floor.
+Prover result is: Valid (0.01s, 37948 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/request_replay.mlw", line 316, character 4 to line 319, character 73:
+Goal retry_after_acknowledge_is_refused.
+Prover result is: Valid (0.02s, 44637 steps).
+PASS: 22/22 goals valid (why3 1.8.2)

@@ -1,0 +1,47 @@
+# H05-H07, H10: a restart reads what the previous incarnation wrote, so the
+# premise is the publish protocol. The contract records writer/reader, schema,
+# sync side, recovery rule and reader count; `atomic_snapshot()` is the marker.
+# The ledger additionally declares the monotone rule documented in
+# d19-monotone-snapshot.log.
+
+$ cargo test --offline -p unfer_protocol --lib storage_contracts
+running 9 tests
+test storage_contracts::tests::a_contract_with_two_writers_has_no_publish_order ... ok
+test storage_contracts::tests::a_watermark_refuses_a_sequence_below_the_one_it_published ... ok
+test storage_contracts::tests::a_watermark_seeded_from_a_load_refuses_the_state_it_loaded_over ... ok
+test storage_contracts::tests::a_synced_replace_and_a_torn_tail_log_both_yield_the_marker ... ok
+test storage_contracts::tests::every_live_storage_contract_yields_the_marker ... ok
+test storage_contracts::tests::only_the_journal_claims_a_byte_bound ... ok
+test storage_contracts::tests::only_the_ledger_declares_a_monotone_publish_rule ... ok
+test storage_contracts::tests::publishing_the_name_before_the_sync_yields_no_marker ... ok
+test storage_contracts::tests::resetting_a_damaged_snapshot_yields_no_marker ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 375 filtered out; finished in 0.00s
+
+$ cargo test --offline -p unfer_consensus --features network --lib net::tests
+running 23 tests
+test net::tests::the_storage_gate_refuses_a_snapshot_that_is_not_crash_safe ... ok
+test net::tests::a_stale_writer_cannot_publish_an_older_ledger_state ... ok
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 166 filtered out; finished in 0.08s
+
+$ cargo test --offline -p unfer_protocol --lib
+test result: ok. 384 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.83s
+
+$ cargo test --offline -p unfer_consensus --features network --lib
+test result: ok. 189 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.02s
+
+$ cargo test --offline -p unfer_consensus --features network --test phase6_testnet
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.08s
+
+$ python3 scripts/check-channel-contracts
+[pass] D19 channel census: 17 hook(s) across 4 file(s), kinds receive, retry, send, simulator, storage, timer, every marker registered and every known hook marked
+
+$ python3 scripts/check-channel-contracts --selftest
+[pass] D19 checker refuses: duplicate hook id
+[pass] D19 checker refuses: unknown kind
+[pass] D19 checker refuses: unknown contract
+[pass] D19 checker refuses: missing marker
+[pass] D19 checker refuses: orphan marker
+[pass] D19 checker refuses: wrong file
+[pass] D19 checker refuses: unmarked hook
+[pass] D19 selftest: 7 mutation control(s) refused

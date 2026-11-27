@@ -1,0 +1,120 @@
+(* D21: the authority-epoch monotonicity claim, stated symbolically and
+   discharged by an SMT prover through Why3.
+
+   THE CLAIM. A partitioned leader that missed a leadership change cannot take a
+   resource back under its old authority: no accepted transition lowers the
+   committed epoch, and a takeover is accepted only under an epoch strictly
+   greater than the committed one.
+
+   WHAT IS MODELLED. The fence state `JobQueue`/`FenceTable` commits: `epoch`
+   (0 = no fence has been issued), `gen`, and whether a claim holds. The
+   operations are the same vocabulary as `unfer_consensus/tests/epoch_invariant.rs`
+   and `jobs.rs`: claim, renew, release, settle, disable, and a takeover naming
+   the new leader's epoch. `takeover` is the compare-and-swap the claim is
+   about; `next_gen` is `FenceTable::next_position` without the wrapping top
+   (the `u64` overflow refusal is checked directly in `jobs.rs`).
+
+   WHAT IS PROVED.
+     * `step_preserves_wf`   -- every step keeps 0 <= epoch and 0 <= gen, and a
+                                held claim has an epoch of at least 1 (E3).
+     * `step_non_decreasing` -- no step lowers the committed epoch (E2).
+     * `accepted_takeover_strictly_raises` -- an accepted takeover installs the
+                                proposed epoch, which is strictly greater, at
+                                generation 1 (E1, E4).
+     * `stale_takeover_changes_nothing` -- an equal or older authority is
+                                refused and leaves the state unchanged (E1).
+     * `first_epoch_is_authority` -- a claim from no fence issues epoch >= 1.
+     * `run_non_decreasing`  -- by induction over the operation list, any run
+                                ends at an epoch at least where it started.
+
+   WHAT IS NOT MODELLED. One resource: the epoch rule is per resource, and
+   `unfer_consensus/tests/epoch_invariant.rs` now searches two resources
+   together to check that interleavings across resources do not change it. The
+   persistence of the committed fence (D19 storage contracts) and the wire
+   encoding are outside this theory.
+*)
+
+module EpochMonotonicity
+
+  use int.Int
+  use list.List
+
+  type op =
+    | Claim
+    | Renew
+    | Release
+    | Settle
+    | Disable
+    | Takeover int
+
+  type state = {
+    epoch: int;
+    gen: int;
+    held: bool;
+  }
+
+  predicate wf (s: state) =
+    0 <= s.epoch /\ 0 <= s.gen /\ (s.held -> s.epoch >= 1)
+
+  let constant initial : state = { epoch = 0; gen = 0; held = false }
+
+  let function next_gen (s: state) : state =
+    { epoch = s.epoch; gen = s.gen + 1; held = s.held }
+
+  let function takeover (s: state) (proposed: int) : state =
+    if proposed > s.epoch then { epoch = proposed; gen = 1; held = true }
+    else s
+
+  let function claim (s: state) : state =
+    if s.held then s
+    else if s.epoch = 0 then { epoch = 1; gen = 1; held = true }
+    else next_gen { s with held = true }
+
+  let function step (s: state) (o: op) : state =
+    match o with
+    | Claim -> claim s
+    | Renew -> if s.held then next_gen s else s
+    | Release -> { s with held = false }
+    | Settle -> { s with held = false }
+    | Disable -> { s with held = false }
+    | Takeover p -> takeover s p
+    end
+
+  lemma step_preserves_wf:
+    forall s o. wf s -> wf (step s o)
+
+  lemma step_non_decreasing:
+    forall s o. wf s -> (step s o).epoch >= s.epoch
+
+  lemma accepted_takeover_strictly_raises:
+    forall s p. wf s -> p > s.epoch ->
+      (takeover s p).epoch = p /\ (takeover s p).epoch > s.epoch
+        /\ (takeover s p).gen = 1
+
+  lemma stale_takeover_changes_nothing:
+    forall s p. wf s -> p <= s.epoch -> takeover s p = s
+
+  lemma first_epoch_is_authority:
+    forall s o. wf s -> s.epoch = 0 -> (step s o).held ->
+      (step s o).epoch >= 1
+
+  let rec function run (s: state) (ops: list op) : state =
+    match ops with
+    | Nil -> s
+    | Cons o rest -> run (step s o) rest
+    end
+
+  let rec lemma run_non_decreasing (s: state) (ops: list op)
+    requires { wf s }
+    ensures { wf (run s ops) }
+    ensures { (run s ops).epoch >= s.epoch }
+    variant { ops }
+  = match ops with
+    | Nil -> ()
+    | Cons o rest ->
+        step_preserves_wf s o;
+        step_non_decreasing s o;
+        run_non_decreasing (step s o) rest
+    end
+
+end

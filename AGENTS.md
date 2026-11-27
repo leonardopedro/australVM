@@ -61,6 +61,12 @@ in-process via native `uk_*` symbols registered in the JIT.
   `scripts/toy-witness` compiles `scripts/toy-witness.rs` with `rustc` on every
   run (no cargo, no build directory) and exits 2 when `rustc` is missing, which
   `verify-invariants` reports as a `[gap]`.
+  The same rule covers the Rust-side checks: `clippy` and `rustfmt` are **shell
+  inputs**, not host tools (measured 2026-11-26 — the devshell had neither, so
+  `clippy-driver` came from the user profile at 1.99.0 while the shell's `rustc`
+  was 1.99.1, and `cargo clippy` died with `E0514: found crate … compiled by an
+  incompatible version of rustc`). Keep them listed in `devShells.default` and
+  `devShells.ocaml`, and run lint through the shell: `make lint`.
 - **When `nix develop` itself will not build (measured 2026-11-13, aarch64).**
   This channel's `alt-ergo` fails inside its own build (`ocamlopt: I/O error:
   as --debug-prefix-map …` — no assembler reachable in that sandbox), and since
@@ -69,7 +75,10 @@ in-process via native `uk_*` symbols registered in the JIT.
   same OCaml/rust/python inputs without why3/alt-ergo/z3; it is enough for
   `make all` and `make test` (measured: 161 tests, 18 suites, 0 failures on a
   clean `_build` on 2026-11-13; re-measured 2026-11-20 as `284 tests` across
-  `30 suites`, all `OK`) and **not** enough for anything that must *prove* —
+  `30 suites`; re-measured 2026-11-26 as `328 tests` across `34 suites` — the
+  suites the distributed merge added, plus the goal-name stability test. All
+  `dune runtest --force` runs, all `OK`) and **not** enough for anything that
+  must *prove* —
   `LiquidWhy3.prove` then takes its structured-skip path. Use `.#ocaml` to build,
   `default` to prove. Address the flake as `git+file://$PWD#ocaml`: a plain path
   makes nix copy the whole worktree (14 GB of `refi/target`) into the store
@@ -104,6 +113,42 @@ shell, so the `nix-shell -p python3 --run …` wrapper is part of each command:
   as an explained gap, never as a false failure.
 - `scripts/check-links` — relative markdown links resolve
   (CI: `.github/workflows/linkcheck.yml`).
+- `scripts/avm-test-census [--status N] <log>` — the avm-pkg CI step's test
+  census (one `::notice`/`::error` annotation per test binary, the last 20
+  failure lines as `::error` annotations on failure — `Compiling`, `Running`,
+  `Doc-tests`, `Finished` and `test result:` are dropped, because the census
+  line already carries the result and GitHub shows ten annotations per step —
+  and the "did not compile" line when no `test result:` appeared). `--status` is
+  cargo's exit status, which the script
+  exits with, so the step still fails on a red suite. `selftest` exercises the
+  green, red, compile-failure and usage paths, diffing each case's output
+  against its block in `scripts/avm-test-census.golden` — levels, both titles
+  and the message text byte for byte, not by substring — so the red path, the
+  one the step is read through, has its own case. The avm-pkg job runs
+  `selftest` before `cargo test` (`build-and-test.yml`), which is what keeps it
+  from rotting. `make annotation-selftests` runs it and
+  `scripts/avm-hot-bench-report`'s selftest locally (plain bash: no dune, no
+  bridge).
+- `scripts/avm-hot-bench-report [--status N] [--reference|--not-reference]
+  <out>` — the avm-pkg job's hot-store smoke reporting half. It prints the
+  report, then: nothing on success; the last three lines as `::error
+  title=hot-bench::` and exit with the status on an enforced miss; the last
+  three as `::warning title=hot-store latency (not enforced on this runner)::`
+  plus the `[gap]` line, its number and exit 0 on a hosted runner. Enforcement
+  defaults to `AVM_LATENCY_REFERENCE=1` (what the step reads); the flags exist
+  for `selftest`, which pins pass, enforced, enforced-by-env, hosted and usage
+  paths by diffing each against `scripts/avm-hot-bench-report.golden` byte for
+  byte, the `[gap]` line and its number included.
+- `scripts/ci-logs` — reads a GitHub Actions job's log through the REST API
+  with `GH_TOKEN` (or `GITHUB_TOKEN`) from the environment, because the web log
+  needs admin rights. No arguments: the latest run on the current branch, its
+  job/step table, and the log of every failed job; `--list`, `--run <id>`,
+  `--job <substr>`, `--branch`. The log endpoint's 302 is followed by hand so
+  the token is never sent to the signed storage URL. A missing token is exit 2
+  with the export line, never an unauthenticated fallback (60 requests/hour is
+  how the 403 rate-limit wall appeared). The repo comes from `origin`.
+  `python3` is not on the host PATH, so run it as
+  `nix-shell -p python3 --run "scripts/ci-logs …"`.
 - `scripts/au2mm0` — reflects an Austral kernel's obligations to integer
   polynomials and decides them twice (symbolic expansion + exact sampling),
   refusing `div`/`float` as a gap. `emit` writes

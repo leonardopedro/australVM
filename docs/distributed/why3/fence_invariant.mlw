@@ -1,0 +1,211 @@
+(* D21: the D14 fencing claim, stated symbolically and discharged by an SMT
+   prover through Why3.
+
+   THE CLAIM. D14 says only the current fence can settle the job or mutate its
+   protected resource. This theory proves the three parts of that sentence over
+   the fence algebra:
+
+     (I1) settle -- a settle changes the job state only when the fence it
+          presents is the state's current, unreleased fence
+          (`settle_applies_only_when_current`), and a refused settle leaves the
+          state exactly as it was (`stale_settle_changes_nothing`).
+     (I2) issuance -- every fence the state issues is strictly newer than the
+          one it replaces: either the run left the fence where it was, or the
+          final fence sorts above the initial one
+          (`run_fence_strictly_newer`). A released-and-reclaimed resource
+          therefore never hands out a fence a sink has already passed.
+     (I3) lifecycle -- `phase = claimed` exactly when a holder holds an
+          unreleased fence (`step_preserves_inv`), and only the current fence
+          can renew, release or disable (`fence_transitions_require_current`).
+
+   WHAT IS MODELLED. A single resource's fence state, with the job label as an
+   integer (0 queued, 1 claimed, 2 fired, 3 disabled) and the holder as a
+   boolean: the holder's *identity* is not part of the claim. `next_generation`
+   /`next_epoch` are `FenceTable::next_position` with the abstracted finite top
+   used by the Rust model check; the real `u64` top is exercised in `jobs.rs`.
+   The transitions are `Claim`/`Reclaim`/`Renew`/`Release`/`Settle`/`Disable`,
+   in the same order and with the same guards as
+   `unfer_consensus/tests/fence_invariant.rs`.
+
+   WHAT IS NOT MODELLED. Two resources and two holders, which the Rust model
+   check explores exhaustively (every reachable state, not samples); the
+   persistence of the committed fence (D19 storage contracts); and the wire
+   encoding. The Rust file remains the guard-mutation and conformance harness
+   around this algebra.
+*)
+
+module FenceInvariant
+
+  use int.Int
+  use list.List
+  use option.Option
+
+  (* The fence algebra, with the job label as an integer and the holder identity
+     as a boolean. The holder's *identity* is not part of the claim (a token is
+     current or not, whatever worker presents it); the job labels are
+     `0 = queued, 1 = claimed, 2 = fired, 3 = disabled`, matching `JobState`. *)
+
+  constant queued : int = 0
+  constant claimed : int = 1
+  constant fired : int = 2
+  constant disabled : int = 3
+
+  type op = Claim | Renew | Reclaim | Release | Settle | Disable
+
+  (* The abstracted finite generation top used by the Rust model check. The real
+     u64 top is exercised in jobs.rs. *)
+  constant max_gen : int = 3
+
+  type state = {
+    has_fence: bool;
+    epoch: int;
+    generation: int;
+    has_holder: bool;
+    phase: int;
+    released: bool;
+  }
+
+  constant initial : state =
+    { has_fence = false; epoch = 0; generation = 0; has_holder = false;
+      phase = queued; released = false }
+
+  predicate inv (s: state) =
+    (s.phase = claimed <-> (s.has_holder && not s.released))
+    && (s.released -> s.has_fence)
+    && (not s.has_fence -> s.phase = queued)
+    && (s.has_fence -> s.epoch >= 1 && s.generation >= 1)
+
+  predicate current (s: state) =
+    s.phase = claimed && s.has_fence && not s.released
+
+  predicate held (s: state) =
+    s.has_fence && not s.released
+
+  predicate older (a b: state) =
+    a.epoch < b.epoch || (a.epoch = b.epoch && a.generation < b.generation)
+
+  function next_epoch (s: state) : int =
+    if s.generation < max_gen then s.epoch else s.epoch + 1
+
+  function next_generation (s: state) : int =
+    if s.generation < max_gen then s.generation + 1 else 1
+
+  function issue (s: state) : state =
+    { s with epoch = next_epoch s; generation = next_generation s;
+      has_fence = true; has_holder = true; phase = claimed; released = false }
+
+  function claim (s: state) : state =
+    if s.phase <> queued || held s then s
+    else if s.has_fence then issue s
+    else { s with has_fence = true; epoch = 1; generation = 1;
+           has_holder = true; phase = claimed; released = false }
+
+  function step (s: state) (o: op) : state =
+    match o with
+    | Claim | Reclaim -> claim s
+    | Renew -> if current s then issue s else s
+    | Release ->
+        if current s then { s with has_holder = false; released = true; phase = queued }
+        else s
+    | Settle ->
+        if current s then { s with has_holder = false; released = true; phase = fired }
+        else s
+    | Disable ->
+        if current s then { s with has_holder = false; released = true; phase = disabled }
+        else s
+    end
+
+  (* Switching the phase away from `claimed` is what every mutating operation
+     does; the fence only moves in `issue`. *)
+  predicate advances (s: state) (s': state) =
+    (s'.has_fence = s.has_fence && s'.epoch = s.epoch
+       && s'.generation = s.generation)
+    || (not s.has_fence && s'.has_fence)
+    || (s.has_fence && s'.has_fence && older s s')
+
+  lemma next_strictly_newer:
+    forall s: state. inv s -> advances s (issue s)
+
+  lemma claim_advances:
+    forall s: state. inv s -> advances s (claim s)
+
+  lemma claim_preserves_inv:
+    forall s: state. inv s -> inv (claim s)
+
+  lemma step_preserves_inv:
+    forall s: state, o: op. inv s -> inv (step s o)
+
+  lemma non_issuing_fence_unchanged:
+    forall s: state, o: op.
+      (o = Release || o = Settle || o = Disable) ->
+      (step s o).has_fence = s.has_fence
+      && (step s o).epoch = s.epoch
+      && (step s o).generation = s.generation
+
+  lemma renew_fence_unchanged_unless_current:
+    forall s: state. not (current s) -> step s Renew = s
+
+  lemma step_advances:
+    forall s: state, o: op. inv s -> advances s (step s o)
+
+  (* --- I1: a settle applies only under the current fence ------------------- *)
+
+  lemma settle_applies_only_when_current:
+    forall s: state. inv s -> step s Settle <> s -> current s
+
+  lemma settle_changes_nothing_or_fires:
+    forall s: state. step s Settle = s || (step s Settle).phase = fired
+
+  lemma stale_settle_changes_nothing:
+    forall s: state. inv s -> not (current s) -> step s Settle = s
+
+  lemma fence_transitions_require_current:
+    forall s: state, o: op.
+      inv s -> (o = Renew || o = Release || o = Disable) ->
+      step s o <> s -> current s
+
+  (* --- runs --------------------------------------------------------------- *)
+
+  predicate fence_le (a b: state) =
+    not a.has_fence ||
+    (b.has_fence &&
+      (a.epoch < b.epoch || (a.epoch = b.epoch && a.generation <= b.generation)))
+
+  lemma fence_le_transitive:
+    forall a b c: state. fence_le a b -> fence_le b c -> fence_le a c
+
+  lemma step_fence_le:
+    forall s: state, o: op. inv s -> fence_le s (step s o)
+
+  let rec ghost function run (s: state) (ops: list op) : state =
+    match ops with
+    | Nil -> s
+    | Cons o rest -> run (ghost (step s o)) rest
+    end
+
+  let rec lemma run_fence_le (s: state) (ops: list op)
+    requires { inv s }
+    ensures { fence_le s (run s ops) }
+    variant { ops }
+  = match ops with
+    | Nil -> ()
+    | Cons o rest ->
+        let s' = ghost (step s o) in
+        step_preserves_inv s o;
+        step_fence_le s o;
+        run_fence_le s' rest;
+        assert { fence_le s' (run s' rest) };
+        fence_le_transitive s s' (run s' rest)
+    end
+
+  (* What a sink relies on: a fence it has already passed can never be the
+     current fence again. Either the run left the fence where it was, or the
+     run's fence is strictly newer. *)
+  lemma run_fence_strictly_newer:
+    forall s: state, ops: list op.
+      inv s -> s.has_fence -> (run s ops).has_fence ->
+      (s.epoch = (run s ops).epoch && s.generation = (run s ops).generation)
+      || older s (run s ops)
+
+end
+

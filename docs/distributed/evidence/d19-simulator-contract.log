@@ -1,0 +1,58 @@
+$ cargo test --offline -p unfer_protocol --lib simulator_contracts
+running 5 tests
+test simulator_contracts::tests::a_horizon_that_rewrites_its_prefix_yields_no_marker ... ok
+test simulator_contracts::tests::a_receipt_for_an_unsubmitted_request_yields_no_marker ... ok
+test simulator_contracts::tests::the_live_view_yields_the_marker ... ok
+test simulator_contracts::tests::a_sequence_past_the_log_yields_no_marker ... ok
+test simulator_contracts::tests::two_views_for_one_replica_are_refused ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 376 filtered out; finished in 0.00s
+
+
+$ cargo test --offline -p unfer_consensus --lib sim::tests
+running 4 tests
+test sim::tests::a_receipt_exists_only_for_an_accepted_submission ... ok
+test sim::tests::the_simulator_gate_accepts_the_live_view ... ok
+test sim::tests::the_simulator_gate_refuses_a_view_that_can_rewrite_history ... ok
+test sim::tests::a_partition_hides_a_suffix_and_a_heal_returns_it_unchanged ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 162 filtered out; finished in 0.02s
+
+$ cargo test --offline -p unfer_protocol --lib
+running 381 tests
+test result: ok. 381 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.80s
+
+$ cargo test --offline -p unfer_consensus --lib
+running 166 tests
+test result: ok. 166 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.00s
+
+$ cargo test --offline -p unfer_consensus --test distributed_schedules
+running 8 tests
+test a_deep_search_to_depth_five_finds_no_violation ... ignored, minutes of wall clock: run it when the D12 bounds are reported
+test a_duplicated_grant_applies_once ... ok
+test a_storage_failure_halts_instead_of_skipping ... ok
+test every_guard_is_witnessed_by_a_minimal_schedule ... ok
+test seeded_random_walks_find_no_violation ... ok
+test the_domain_applies_and_refuses_as_specified ... ok
+test the_same_trace_produces_the_same_state ... ok
+test a_bounded_exhaustive_search_finds_no_violation ... ok
+
+test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 21.57s
+
+$ python3 scripts/check-channel-contracts
+[pass] D19 channel census: 17 hook(s) across 4 file(s), kinds receive, retry, send, simulator, storage, timer, every marker registered and every known hook marked
+$ python3 scripts/check-channel-contracts --selftest
+[pass] D19 checker refuses: duplicate hook id
+[pass] D19 checker refuses: unknown kind
+[pass] D19 checker refuses: unknown contract
+[pass] D19 checker refuses: missing marker
+[pass] D19 checker refuses: orphan marker
+[pass] D19 checker refuses: wrong file
+[pass] D19 checker refuses: unmarked hook
+[pass] D19 selftest: 7 mutation control(s) refused
+$ python3 scripts/check-distributed-contracts
+[pass] D00 contracts: 96 contract row(s), 8 baseline row(s) (0 named gap(s)), all paths and evidence files present, measured against unfer 046cf78
+
+$ cargo test --offline -p unfer_consensus --features network --lib
+running 188 tests
+test result: ok. 188 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.38s

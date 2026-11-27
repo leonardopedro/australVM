@@ -1,7 +1,9 @@
 measured: unfer_consensus fence_invariant (offline, --nocapture)
+unfer: dbfb961
 conformance coverage: 6 operations, 181 stale tokens presented, 0 accepted
 fence invariant: states=2116 transitions=507840 settled=3312 violations=0
 conformance: 4800 steps compared, 0 disagreements, 178 stale tokens presented, 0 accepted
-
-binary result:
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+mutation StaleSettle: caught (I1 an effect would be applied under a non-current fence) after 1 step(s), last: settle r0 as w0 under (epoch 1, generation 2)
+mutation WrapGeneration: caught (I2 a newly issued fence is not newer) after 3 step(s), last: renew r0 as w0 under (epoch 1, generation 3)
+mutation StaleRelease: caught (I3 a fence transition was accepted on a non-current fence) after 1 step(s), last: release r0 as w0 under (epoch 1, generation 2)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s

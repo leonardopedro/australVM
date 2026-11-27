@@ -2,13 +2,19 @@
 # See LICENSE file for details.
 #
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-"""Tests for the runner's suite list.
+"""Tests for the runner's suite list and its copy-source fixtures.
 
 The default run is `DEFAULT_SUITES`, and `collect_tests` refuses a `suites/`
 directory the tuple does not name (a suite nobody compiles) and a tuple entry
 with no directory (a stale name). Both refusals are only worth having if they
 can fail, so each is held to a scratch pair here, and the repository's own pair
 is checked to agree.
+
+A suite that copies an example (`source-copy.txt`) is checked the same way, in
+both directions: every `examples/…` module the origin declares must be in the
+copy, and the copy may not hold a module the origin no longer has. That is the
+same comparison the e2e case runs, but here it needs no compiler, so a stale or
+dropped module is named in seconds instead of after a full `make test`.
 
 Run with `python3 test-programs/test_runner.py`.
 """
@@ -18,6 +24,11 @@ import tempfile
 import unittest
 
 import runner
+
+
+def _write(directory: str, name: str, text: str) -> None:
+    with open(os.path.join(directory, name), "w", encoding="utf-8") as stream:
+        stream.write(text)
 
 
 class SuiteListTest(unittest.TestCase):
@@ -75,6 +86,82 @@ class SuiteListTest(unittest.TestCase):
         self.assertEqual(
             runner.worker_count([object()] * 3), min(3, os.cpu_count() or 1)
         )
+
+    def test_every_copy_source_fixture_still_holds_its_origin_modules(self) -> None:
+        # The e2e case compiles each suite, so a copy that lost a module — or
+        # kept one the origin no longer has — was only found after `make test`
+        # and the rest of the run; the same comparison here is file IO and
+        # fails with the offending name. It uses
+        # the runner's own case, so the fast check and the compiled one cannot
+        # disagree about what a copy must hold.
+        fixtures = [
+            test
+            for test in runner.collect_tests()
+            if isinstance(test, runner.TestFixtureCopy)
+        ]
+        self.assertGreaterEqual(len(fixtures), 2, "no copy-source fixture to check")
+        for test in fixtures:
+            result = runner._run_fixture_copy_test(test)
+            detail = ""
+            if isinstance(result, runner.TestFail):
+                detail = result.reason + "\n" + "\n".join(
+                    f"{name}: {value}" for name, value in result.outputs
+                )
+            self.assertIsInstance(
+                result,
+                runner.TestPass,
+                f"{test.suite_name}/{test.name} does not match `{test.source_dir}`:\n{detail}",
+            )
+
+    def test_a_copy_that_drops_a_module_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as scratch:
+            origin = os.path.join(scratch, "examples", "origin")
+            copy = os.path.join(scratch, "suite", "case")
+            os.makedirs(origin)
+            os.makedirs(copy)
+            _write(origin, "Alpha.aui", "interface Alpha is\nend interface.\n")
+            _write(origin, "Beta.aum", "module body Beta is\nend module body.\n")
+            _write(copy, "Alpha.aui", "interface Alpha is\nend interface.\n")
+            test = runner.TestFixtureCopy(
+                name="case/copy",
+                suite_name="999-scratch",
+                directory=copy,
+                source_dir=origin,
+            )
+            result = runner._run_fixture_copy_test(test)
+            self.assertIsInstance(result, runner.TestFail)
+            dropped = "\n".join(
+                f"{label}: {value}" for label, value in result.outputs
+            )
+            self.assertIn("Beta.aum", dropped)
+            self.assertIn("MISSING FROM COPY", dropped)
+
+    def test_a_copy_that_keeps_a_removed_module_is_refused(self) -> None:
+        # The other direction: the origin dropped a module and the fixture kept
+        # compiling it. Without this the `extra`/`NOT IN ORIGIN` half of the
+        # comparison could stop working and every copy-source suite would
+        # quietly run code `examples/` no longer declares.
+        with tempfile.TemporaryDirectory() as scratch:
+            origin = os.path.join(scratch, "examples", "origin")
+            copy = os.path.join(scratch, "suite", "case")
+            os.makedirs(origin)
+            os.makedirs(copy)
+            _write(origin, "Alpha.aui", "interface Alpha is\nend interface.\n")
+            _write(copy, "Alpha.aui", "interface Alpha is\nend interface.\n")
+            _write(copy, "Retired.aum", "module body Retired is\nend module body.\n")
+            test = runner.TestFixtureCopy(
+                name="case/copy",
+                suite_name="999-scratch",
+                directory=copy,
+                source_dir=origin,
+            )
+            result = runner._run_fixture_copy_test(test)
+            self.assertIsInstance(result, runner.TestFail)
+            stale = "\n".join(
+                f"{label}: {value}" for label, value in result.outputs
+            )
+            self.assertIn("Retired.aum", stale)
+            self.assertIn("NOT IN ORIGIN", stale)
 
     def test_a_wired_but_empty_suite_is_not_a_disagreement(self) -> None:
         with tempfile.TemporaryDirectory() as suites_dir:

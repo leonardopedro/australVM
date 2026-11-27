@@ -5744,15 +5744,179 @@ the reason now reads as a size the machine cannot supply, not as an arbitrary ca
 102 MB / 37 441-rule artifact that needed 819 s of `mm0-rs` (`§13.62`) scales to this: at
 251 MB the compile is both superlinear in time and past the available address space.
 
-**Where the namespace sweep stands.** The 475-declaration pause this section was written in is
-long past: the ledger now holds **1 389 verified of 3 975**, and every row in it is a pass. The
-five non-passes the paused log carried have since been decided one way or the other —
+The non-passes the paused log carried have since been decided one way or the other —
 `renameCore` is the measurement above, the `Φ` and `hΔ0` rejections became verdicts with
 `§13.62b`'s `mm0_ident` fix, and `.EnvModelM.swapP`/`.swapTyP` have `§13.62f`. Two later runs
 were OOM-killed at the same declaration, `.TgtNodePres.kit` the last line of each log; `§13.62h`
-reproduces the kill alone and fixes its cause. Every finished row survives in the ledger, so a
-resume replays the 1 389 as `memo` hits — about ten minutes — and the closures, the rules applied
-and the failure histogram land only at a clean exit, in `_build/conleche/model-scan.log`.
+reproduces the kill alone, `§13.62j` fixes its cause in the checker and closes the declaration,
+and `§13.62k` fixes the reason reader that was recording derivations as verdicts. What the reader
+then read on `.declQuotPB_at` — `at sd1254: store overflow` — is `§13.62l`: a second checker
+constant that is 31 % short, not a rejection.
+
+<!-- 13.62c-sweep:begin -->
+**Where the namespace sweep stands.** The sweep reached its own end at
+`2026-11-26T21:45` with
+**verified closures 3870/3975**:
+`21527472` rules applied and `5895963` assumptions (1523.5 per declaration),
+2474 declarations replayed as memo hits rather than re-emitted. The ledger
+holds **3896 rows**, **3871 of them passes** and **25
+recorded failures**: a row is appended for a declaration `mm0-c` accepted, or
+with `--record-failures` to say how a failed one was measured. The post-exit
+`--rekey` returned rc=0 and the statement audit over the finished namespace
+rc=0; `sweep-exit-report.md` carries both logs, and the sweep's own summary
+is quoted there verbatim.
+
+The histogram it exited with, 105 failed rows of 3975:
+
+| class | rows |
+| --- | ---: |
+| `mm0-rs ✗ over 10 GiB` | 55 |
+| `mm0-rs ✗ over 6 GiB` | 24 |
+| `mm0-rs ⏱ over 240 s` | 13 |
+| `emit ⏱ over 240 s` | 12 |
+| `mm0-c ✗ at sd1254: store overflow` | 1 |
+
+**The memory-bound rows re-measured alone at 20 G.** A sweep bound is not a
+verdict, so each of these rows — whichever bound it was recorded under — was
+compiled on its own: the artifact the sweep left behind, `mm0-rs compile` in a
+cgroup of `MemoryMax=20G` + `MemorySwapMax=4G`, a 1260 s cap (`probe-10gib.sh`):
+
+| declaration | bound it hit | `.mm1` bytes | verdict | wall | peak |
+| --- | ---: | ---: | --- | ---: | ---: |
+| `ConLeche.Model.admVal_kid` | 10 GiB | 383,463,584 | OOM-killed — **out of reach** | 532 s | — |
+| `ConLeche.Model.blk_ctorFit` | 10 GiB | 291,416,385 | closes at 20 G — **over budget** | 258 s | 10.6 GB |
+| `ConLeche.Model.blockFormerFacts_of` | 10 GiB | 583,185,590 | closes at 20 G — **over budget** | 482 s | 18.2 GB |
+| `ConLeche.Model.blockHoleCtx_canon` | 10 GiB | 408,633,662 | closes at 20 G — **over budget** | 370 s | 13.6 GB |
+| `ConLeche.Model.blockRunLink` | 10 GiB | 588,639,908 | closes at 20 G — **over budget** | 437 s | 19.8 GB |
+| `ConLeche.Model.blockTablesStage_of` | 10 GiB | 1,072,592,261 | OOM-killed — **out of reach** | 388 s | — |
+| `ConLeche.Model.callWalkSyn` | 10 GiB | 486,066,952 | OOM-killed — **out of reach** | 408 s | — |
+| `ConLeche.Model.divModClausesV_congr` | 10 GiB | 824,779,967 | OOM-killed — **out of reach** | 580 s | — |
+| `ConLeche.Model.dyn_ctorFit` | 10 GiB | 254,028,240 | closes at 20 G — **over budget** | 386 s | 15.4 GB |
+| `ConLeche.Model.dyn_nodeBlock` | 10 GiB | 325,514,105 | closes at 20 G — **over budget** | 259 s | 12.0 GB |
+| `ConLeche.Model.eqRecFit` | 10 GiB | 414,826,898 | closes at 20 G — **over budget** | 353 s | 17.6 GB |
+| `ConLeche.Model.eqRecLaw` | 10 GiB | 263,379,100 | closes at 20 G — **over budget** | 250 s | 13.9 GB |
+| `ConLeche.Model.frameAccOut_of` | 10 GiB | 296,725,774 | closes at 20 G — **over budget** | 259 s | 10.8 GB |
+| `ConLeche.Model.frameCtor_acc` | 10 GiB | 571,349,814 | closes at 20 G — **over budget** | 601 s | 20.0 GB |
+| `ConLeche.Model.genArgs_graded` | 10 GiB | 230,388,792 | OOM-killed — **out of reach** | 436 s | — |
+| `ConLeche.Model.genCall_data` | 10 GiB | 479,451,600 | OOM-killed — **out of reach** | 289 s | — |
+| `ConLeche.Model.genClsRd_mem` | 10 GiB | 319,177,221 | closes at 20 G — **over budget** | 442 s | 16.8 GB |
+| `ConLeche.Model.genCls_coreI` | 10 GiB | 301,079,647 | closes at 20 G — **over budget** | 404 s | 12.5 GB |
+| `ConLeche.Model.genCls_coreII` | 10 GiB | 325,432,092 | closes at 20 G — **over budget** | 278 s | 10.9 GB |
+| `ConLeche.Model.genCls_dec` | 10 GiB | 359,498,675 | closes at 20 G — **over budget** | 284 s | 14.0 GB |
+| `ConLeche.Model.genCls_open` | 10 GiB | 271,554,105 | closes at 20 G — **over budget** | 368 s | 16.7 GB |
+| `ConLeche.Model.genFit1_core` | 10 GiB | 521,400,891 | OOM-killed — **out of reach** | 323 s | — |
+| `ConLeche.Model.genFit2_core` | 10 GiB | 536,769,956 | OOM-killed — **out of reach** | 898 s | — |
+| `ConLeche.Model.genHstepG` | 10 GiB | 620,300,164 | OOM-killed — **out of reach** | 570 s | — |
+| `ConLeche.Model.genIhFree_run` | 10 GiB | 371,506,700 | OOM-killed — **out of reach** | 374 s | — |
+| `ConLeche.Model.genIhMot` | 10 GiB | 324,351,423 | OOM-killed — **out of reach** | 537 s | — |
+| `ConLeche.Model.genIhUnder` | 10 GiB | 309,565,468 | OOM-killed — **out of reach** | 347 s | — |
+| `ConLeche.Model.genMem_K` | 10 GiB | 295,935,565 | closes at 20 G — **over budget** | 259 s | 10.2 GB |
+| `ConLeche.Model.genMinorSetup` | 10 GiB | 450,403,739 | OOM-killed — **out of reach** | 438 s | — |
+| `ConLeche.Model.genMinorTower` | 10 GiB | 315,445,978 | OOM-killed — **out of reach** | 450 s | — |
+| `ConLeche.Model.genMinor_pt` | 10 GiB | 399,637,082 | OOM-killed — **out of reach** | 550 s | — |
+| `ConLeche.Model.genMotRds` | 10 GiB | 376,439,737 | OOM-killed — **out of reach** | 299 s | — |
+| `ConLeche.Model.genNodeFrameTie` | 10 GiB | 309,482,723 | closes at 20 G — **over budget** | 176 s | 10.3 GB |
+| `ConLeche.Model.genOutCtorFit` | 10 GiB | 275,284,370 | closes at 20 G — **over budget** | 195 s | 10.6 GB |
+| `ConLeche.Model.genOutCtorOwn` | 10 GiB | 405,288,612 | closes at 20 G — **over budget** | 493 s | 15.6 GB |
+| `ConLeche.Model.genOutCtorRefit` | 10 GiB | 302,866,798 | closes at 20 G — **over budget** | 259 s | 10.7 GB |
+| `ConLeche.Model.genOutExtra` | 10 GiB | 398,773,647 | closes at 20 G — **over budget** | 396 s | 14.2 GB |
+| `ConLeche.Model.genOut_T` | 10 GiB | 333,107,907 | closes at 20 G — **over budget** | 490 s | 17.6 GB |
+| `ConLeche.Model.genOut_pin` | 10 GiB | 287,417,628 | closes at 20 G — **over budget** | 415 s | 11.9 GB |
+| `ConLeche.Model.genOutsideClass_reachedNode` | 10 GiB | 360,408,186 | closes at 20 G — **over budget** | 242 s | 12.3 GB |
+| `ConLeche.Model.genParams_fit_run` | 10 GiB | 293,757,863 | closes at 20 G — **over budget** | 388 s | 11.8 GB |
+| `ConLeche.Model.genRecCtx_nodes` | 10 GiB | 652,076,512 | OOM-killed — **out of reach** | 320 s | — |
+| `ConLeche.Model.genRecEqs_wd` | 10 GiB | 641,893,590 | OOM-killed — **out of reach** | 565 s | — |
+| `ConLeche.Model.genRecHdataS` | 10 GiB | 279,953,982 | closes at 20 G — **over budget** | 1256 s | 19.3 GB |
+| `ConLeche.Model.genRecStage` | 10 GiB | 334,868,155 | closes at 20 G — **over budget** | 439 s | 15.7 GB |
+| `ConLeche.Model.genRhs` | 10 GiB | 270,499,536 | closes at 20 G — **over budget** | 205 s | 10.1 GB |
+| `ConLeche.Model.genRowParams` | 10 GiB | 246,347,141 | OOM-killed — **out of reach** | 389 s | — |
+| `ConLeche.Model.genRow_hstep` | 10 GiB | 304,069,804 | closes at 20 G — **over budget** | 1069 s | 11.2 GB |
+| `ConLeche.Model.genRows3_mem` | 10 GiB | 456,518,686 | OOM-killed — **out of reach** | 956 s | — |
+| `ConLeche.Model.genRows3_out` | 10 GiB | 325,249,613 | closes at 20 G — **over budget** | 488 s | 13.0 GB |
+| `ConLeche.Model.genRuleRaZ` | 10 GiB | 239,485,910 | closes at 20 G — **over budget** | 375 s | 15.4 GB |
+| `ConLeche.Model.genRule_shapeD` | 10 GiB | 317,691,865 | closes at 20 G — **over budget** | 171 s | 10.4 GB |
+| `ConLeche.Model.genRun_below` | 10 GiB | 328,100,716 | closes at 20 G — **over budget** | 554 s | 18.1 GB |
+| `ConLeche.Model.genRun_frame` | 10 GiB | 226,547,420 | closes at 20 G — **over budget** | 275 s | 11.8 GB |
+| `ConLeche.Model.harvestDefn` | 6 GiB | 208,396,756 | closes at 20 G — **over budget** | 125 s | 7.2 GB |
+| `ConLeche.Model.instCtor_read` | 6 GiB | 189,219,435 | closes at 20 G — **over budget** | 138 s | 6.9 GB |
+| `ConLeche.Model.natOpRow_of` | 6 GiB | 227,243,171 | closes at 20 G — **over budget** | 109 s | 7.2 GB |
+| `ConLeche.Model.natOpV_beq` | 6 GiB | 146,544,525 | closes at 20 G — **over budget** | 151 s | 6.4 GB |
+| `ConLeche.Model.natOps_install` | 6 GiB | 559,949,512 | OOM-killed — **out of reach** | 375 s | — |
+| `ConLeche.Model.param_read_eq` | 6 GiB | 188,472,028 | closes at 20 G — **over budget** | 204 s | 6.6 GB |
+| `ConLeche.Model.pinnedStructT_congr` | 6 GiB | 228,404,668 | closes at 20 G — **over budget** | 120 s | 7.3 GB |
+| `ConLeche.Model.quotIndFit` | 6 GiB | 370,601,760 | closes at 20 G — **over budget** | 343 s | 18.3 GB |
+| `ConLeche.Model.quotIndLaw` | 6 GiB | 213,097,820 | closes at 20 G — **over budget** | 180 s | 8.9 GB |
+| `ConLeche.Model.quotLiftExtra` | 6 GiB | 208,726,809 | closes at 20 G — **over budget** | 138 s | 6.6 GB |
+| `ConLeche.Model.quotLiftFit` | 6 GiB | 434,534,448 | OOM-killed — **out of reach** | 420 s | — |
+| `ConLeche.Model.quotLiftLaw` | 6 GiB | 406,847,186 | OOM-killed — **out of reach** | 378 s | — |
+| `ConLeche.Model.recRuleLaw_stored` | 6 GiB | 183,950,588 | closes at 20 G — **over budget** | 285 s | 13.0 GB |
+| `ConLeche.Model.recStagePinsOk` | 6 GiB | 355,864,053 | closes at 20 G — **over budget** | 418 s | 12.3 GB |
+| `ConLeche.Model.recStage_of_gen` | 6 GiB | 266,832,042 | closes at 20 G — **over budget** | 236 s | 11.2 GB |
+| `ConLeche.Model.stageBlockCtorsAt` | 6 GiB | 174,176,882 | closes at 20 G — **over budget** | 179 s | 7.4 GB |
+| `ConLeche.Model.stageFixTable` | 6 GiB | 861,539,946 | OOM-killed — **out of reach** | 487 s | — |
+| `ConLeche.Model.storedFieldShapes_of_walk` | 6 GiB | 632,311,653 | OOM-killed — **out of reach** | 497 s | — |
+| `ConLeche.Model.storedMajorSub_ctx` | 6 GiB | 186,486,411 | closes at 20 G — **over budget** | 130 s | 6.8 GB |
+| `ConLeche.Model.storedSwap_sem` | 6 GiB | 244,347,950 | closes at 20 G — **over budget** | 166 s | 8.9 GB |
+| `ConLeche.Model.sumCtorData_of` | 6 GiB | 624,832,026 | OOM-killed — **out of reach** | 336 s | — |
+| `ConLeche.Model.tgtNodePres_of_list` | 6 GiB | 482,280,778 | closes at 20 G — **over budget** | 493 s | 16.9 GB |
+| `ConLeche.Model.trueVal_frameApp` | 6 GiB | 226,473,087 | closes at 20 G — **over budget** | 211 s | 8.1 GB |
+| `ConLeche.Model.EnvModelM.renameCore` | 10 GiB | 251,444,344 | closes at 20 G — **over budget** | 373 s | 17.1 GB |
+| `ConLeche.Model.targetAbs_read._f` | 6 GiB | 199,175,683 | closes at 20 G — **over budget** | 96 s | 8.2 GB |
+
+79 re-measured; **53 close** at 20 G, so for them the `10 GiB`, `6 GiB` bound was the limit: those rows are over that budget, not out of reach; **26 are killed** by the cgroup at 20 G + 4 G of swap, which is the whole margin on this 30 GB host, so no bound below its ceiling closes them: out of reach.
+<!-- 13.62c-sweep:end -->
+
+**Six runs, joined by declaration.** The block above is a union, not one run. The sweep that
+started at 12:30 was ended by the kernel's OOM killer at 15:39 with 1 510 of 3 975 declarations
+left (`systemctl` recorded `oom-kill`; the unit peaked at 10.3 GB, with a test scan of mine
+running beside it and taking the host past 30 GB). Two shards ran from 15:45 over disjoint
+*interleaved* halves of what remained — interleaved because the tail is not uniform and a
+contiguous split would hand one shard every `genIh*` monster — each in a 12 G cgroup with the
+sweep's own 10 GiB bounds, so a row's verdict did not depend on its measurer. They decided 162
+declarations in 45 minutes (97 of them substantive, the rest memo hits), at peaks of 11.16 GB and
+11.02 GB: the tail is memory-saturated, and three shards at that bound would need 33 GB on a
+30.8 GB host, which is the overcommit that caused the kill in the first place.
+
+So from 16:45 the remaining 1 348 declarations ran as **three** shards in 8 G cgroups with both
+per-row bounds lowered to 6 GiB. That is a *different measurement*, not a smaller version of the
+same one: its rows are recorded as their own class (`mm0-rs ✗ over 6 GiB`), and the probe table
+re-measures them at 20 G exactly like the 10 GiB ones, with the bound each row was recorded under
+as a column — the two classes are never folded into each other. Two details make a bound
+attributable rather than a guess: each shard sets `OOMPolicy=continue`, so a cgroup kill takes the
+child and not the unit, and a SIGKILL is classified as the bound it hit (`returncode in (-6, -9)`,
+labelled with `min(cap, cgroup)` read from `/proc/self/cgroup`) instead of being reported as a
+checker's rejection. All six runs write into the same ledger, and `merge-logs.py` joins them by
+declaration, last write wins: no declaration is counted twice, so the closures and histogram
+above are what one run over the whole namespace would have produced.
+
+**Failures, the ledger, and which bound measured them.** The ledger now has a `verdict` column
+(`pass`/`failed`) and a `reason`, appended after the existing twelve so a row written before them
+still lines up and reads as a pass; `proved()` gates both memo paths — the exact
+`(export, theory, mode, declaration)` row and the statement-digest index over
+`statement_sha256` — so a recorded failure is measured again next run instead of becoming a hit
+that skips the declaration. `--record-failures` writes those rows (`rules=0`, the checker's own
+words as the reason), off by default because a 10 GiB row costs minutes. Until it existed a
+failed declaration left no row at all, which is why the runs up to the OOM kill wrote only
+passes; the two shards that finished the tail ran with `--record-failures`, so their failures
+are rows too, with the bound in the reason.
+
+What the ledger still cannot express is *which bound* measured a failure. A row's identity is the
+export, the theory, the mode and the declaration; the sweep's 10 GiB is in none of them, so a
+`failed: mm0-rs: over 10 GiB` row and the 20 G re-measurement of the same declaration would land
+under one key with two different caps, and the last one written would describe the other. That is
+why the 20 G verdicts stay in `probe-10gib.log`, the exit report and the block above, where the
+cap is a column: entering them needs the bound in the key, not just the verdict in the row.
+
+Every finished row survives in the ledger, so a resume replays the finished set as `memo` hits —
+minutes, not the hours the real work took — which is why the run was restarted once per defect
+(the recursion limit, the reader, the checker's heap) instead of exiting on a histogram that
+counts a fixed defect's output. The block above is *rendered*, not transcribed:
+`_build/conleche/fold-sweep.py` reads `model-scan.log` for the closures, the rules applied and the
+per-row verdicts, the ledger for its row count, and `probe-10gib.log` for the 20 G verdicts, and
+rewrites everything between the two markers. The chain that runs it (`chain-after-sweep.sh`) is
+one unit: wait for the sweep, `--rekey` and audit (`sweep-exit-report.md`), probe, fold. The
+histogram is also stamped across the `STORE_SIZE` rebuild `§13.62l` describes (14:20), the one
+checker change made mid-run: rows decided before it met a 2^26 store, rows after it 2^27.
 
 ### 13.62d `swapP` and `swapTyP`: the 240 s emit bound was the limit, the checker is the wall
 
@@ -5906,7 +6070,8 @@ minutes each, in the export's JSON decode:
 `RecursionError: maximum recursion depth exceeded while decoding a JSON object`, for the deeply
 nested bodies of `.eqRecFit`, `.eqRecLaw`, `.genFit1_core`, `.genIhFree_run`, `.genNodeCalls`,
 `.genRule_residue`, `.quotIndFit`, `.quotIndLaw`, `.quotLiftFit` and `.quotLiftLaw`. That is depth,
-not time or memory, and it is the next thing the digest path needs.
+not time or memory, and `§13.62i` is the depth: one recursion limit, raised, after which all ten
+digest and none of them is a parse failure.
 
 One more number to keep straight: the ledger's rows outnumber its distinct statements — 1 196 against
 1 172 at the snapshot, 1 389 against 1 365 later — because 24 rows are byte-identical to another
@@ -5940,7 +6105,188 @@ overflow`. The 4.5 GB went to disk and was discarded.
 The rejection itself is not a budget. `mm0-c` takes no heap argument (`Incorrect args; use
 'mm0-c MMB-FILE < MM0-FILE'`), so its heap is a buffer fixed at compile time in the verifier: a
 derivation this wide does not fit it, which is a capacity fact about the checker and is now its own
-failure class (`over the checker's own heap`) instead of being reported as "out of memory". It also
+failure class (`over the checker's own heap`) instead of being reported as "out of memory".
+`§13.62j` measures that capacity: the buffer is compile-time constant, the shortfall is 6 % of it,
+and at twice the size the same artifact verifies in 1.9 s. It also
 got a time budget for the first time (`SCAN_MM0_C_TIMEOUT`, 900 s): it never needed one while every
 rejection was small, and now a rejected giant cannot hold the sweep for as long as its trace takes
 to write.
+
+### 13.62i The ten undigested statements were a recursion limit, not a parse failure
+
+`§13.62g` left ten declarations with `no digest produced` even at `SCAN_EMIT_TIMEOUT=1800`, and the
+row could be read as an export those declarations defeat. Run alone with the traceback kept, it is
+not the decode: the frames go `Deriver._enc` → `_enc_tokens` → `self.exprs[eid]` → `json.loads`, and
+the scanner raises `RecursionError: maximum recursion depth exceeded while decoding a JSON object`
+because *it* is called a thousand frames down, not because the record is deep. The records are four
+braces deep at most — measured by scanning every one of the export's 9 361 371 lines for its
+per-line nesting, which peaks at 4 — so the depth belongs to the derivation walk. A limit one
+frame from the top is a limit, and the statements were never the problem.
+
+The fix is one line in `scripts/lean2mm0` (which both the emitter and `lean-proof-scan` import):
+raise the interpreter's limit to at least 20 000. Four thousand already decodes `.eqRecFit` and
+returns digest `253ff17f…` in **10.0 s / 470 MB**, the same digest `20 000` and `60 000` return in
+10.0 s / 486 MB, so the margin above what this export needs costs nothing measurable.
+
+Re-audited with `--only` on the ten names against the live ledger: `digest unavailable: 0` (from
+10), `statement differs: 0`, `no ledger row: 10` — the ten fall in the sweep's unproved remainder,
+which is the verdict their neighbours get and not a gap in the digest path. **All 3 975 declarations
+now have a statement digest.**
+
+The same limit was behind 24 of the sweep's `emit ✗` rows, in five wordings — "in comparison",
+"getting the repr of an object", "getting the str of an object", "decoding a JSON object" and the
+bare message — because the limit is reached through whichever C entry point runs deep in the walk.
+`.eqRecFit` re-emitted after the fix: **139.5 s, 414 754 840 B `.mm0`, 414 808 796 B `.mm1`,
+2 800 990 631 B of conversion obligations**, so what those rows needed was the limit and not a
+smaller term. Whether they close is now the `mm0-rs` budget question of `§13.62c`, not a crash in
+the decoder. The sweep was restarted on the fix (its 2 472 ledger rows replay as `memo` hits) so the
+failure histogram it exits with counts this class at its real size rather than as its own.
+
+### 13.62j The checker's heap was 6 % short: `.TgtNodePres.kit._proof_1` verifies at twice the size
+
+`§13.62h` called the `mm0-c` rejection a capacity fact, which is a claim one can check, because the
+capacity is a compile-time constant. In the checker's `verifier_types.c` the proof heap is
+`HEAP_SIZE 65536` `u32` entries — 256 KB, beside `STORE_SIZE` 2^26 bytes, `UNIFY_HEAP_SIZE` 65 536
+and a 65 536-entry stack. `mm0-c` takes no argument for it, but it is a `#define`: the seven checker
+sources were copied to `_build/mm0-c-big` and `_build/mm0-c-2x` (with `-DHIGHWATER` on the second)
+and built with `gcc -O2`, leaving `../mm0-rs/mm0-c` and the installed `~/.local/bin/mm0-c`
+untouched.
+
+The artifact is the one the previous sweep left behind, kept under `_build/conleche/mm0c-heap/`
+(`full.mmb` 17 602 560 B against a 165 512 236-byte `full.mm0`). At the default heap it reproduces
+`§13.62h`'s `heap overflow`. At `HEAP_SIZE (1 << 17)` — twice the default, 512 KB — it **verifies:
+exit 0 in 1.9 s wall, 195 MB peak RSS**, and the highwater counters say how close it was:
+
+| buffer | highwater | size | used |
+| --- | --- | --- | --- |
+| proof heap | **69 478** | 65 536 → 131 072 | 106 % of the default, 53 % of 2× |
+| store | 12 737 020 | 67 108 864 | 19 % |
+| unify heap | 4 846 | 65 536 | 7 % |
+| stack | 200 | 65 536 | 0.3 % |
+| unify stack | 44 | 256 | 17 % |
+
+Exit 0 is past the checker's own `not all sorts / terms / theorems proved` checks and its sorry
+check, so the derivation is accepted, not merely un-rejected. The shortfall was **6.0 % of one
+buffer** — 3 942 entries — and no other buffer was within a factor of five. The repair is a
+one-line change upstream in `mm0-c`, and it is applied: `HEAP_SIZE (1 << 17)` now sits in
+`../mm0-rs/mm0-c/verifier_types.c` (committed there as `4bbd4fe`), the normal build
+(`gcc main.c -O2`, no `-D` flags) was installed as `~/.local/bin/mm0-c`, and *that* binary
+re-verifies the same artifact in **1.78 s / 195 632 KB peak, exit 0**. The `-DHIGHWATER` copies
+under `_build/mm0-c-*` stay as the measurement build; the default build prints no counters. The
+sweep was restarted on the installed checker, so `over the checker's own heap` is no longer a
+class the run can produce unless a larger derivation outgrows 2^17 — the class meant "this
+checker's constant", not "this derivation is wrong".
+
+That restart also needed the driver to stop resolving the checker by name. Inside `nix develop` the
+name resolves two ways, measured both: `nix develop -c bash -c 'command -v mm0-c'` gives the nixpkgs
+package (`/nix/store/…-mm0-0.1.0-unstable-2026-09-30/bin/mm0-c`), while `nix develop -c bash -lc
+'command -v mm0-c'` gives `/home/leo/.local/bin/mm0-c` — the login shell puts `~/.local/bin` ahead
+of the store paths. The sweep's own shape is the second one (`bash -lc` outside, `nix develop -c
+python3` inside), so it already resolved the installed rebuild; that is consistent with the part-6
+log, where `.TgtNodePres.kit._proof_1` is no longer a non-pass but `pass ✓` — 65 334 rules, a
+170 564 417-byte derivation, reachable only by a checker that exits 0 on it. The stock copy, run on
+the preserved artifact with its dump discarded, was still running at 120 s (it spends the time
+producing the rejection dump `§13.62k` describes); the installed build exits 0 in 1.78 s. Because
+the resolution depends on the shape of the shell, the driver takes the path from `SCAN_MM0_C`
+(default `mm0-c`, overridable like the other bounds) and the sweep runs with
+`SCAN_MM0_C=/home/leo/.local/bin/mm0-c`, visible in the unit's environment. Checked both ways: one
+declaration through the override (`.declBasisPB_emptyK`, 8 447 rules, **17.0 s, pass**) and the same
+run pointed at a path that does not exist, which stops with `FileNotFoundError` instead of falling
+back to the package.
+
+No second row in the run hit *that* class, and none can while the heap is 2^17: the next `mm0-c`
+non-pass, `.declQuotPB_at`, is a capacity fact about a different buffer — `§13.62k` finds the reader
+that was hiding its verdict, and `§13.62l` measures the shortfall.
+
+### 13.62k The reason reader read the wrong end of the dump: `.declQuotPB_at`'s verdict
+
+The row above is a *reason* that is not one: `mm0-c ✗ .declQuotPB_at: mm0-c: ucc (tsucc (tsucc …`
+is a piece of the statement, cut mid-token. The reader
+(`mm0_c_reason()` in `scripts/lean-proof-scan`) took the last non-empty line before the
+`── the derivation ──` banner in the first 8 KiB of stderr, on the reading that the checker prints
+its verdict, then the banner, then the statement it rejected.
+
+Reproduced from `mm0-c`'s own `fail()` (`verifier.c`), which prints in this order: `stmt:
+<offset>`, the command dump, a blank line, the verdict (`at <name>: <reason>`, or the reason alone
+when it has no name), and only then `debug_print_input()`, which echoes the input line it was
+reading. The old reader therefore depended on the banner being inside its 8 KiB prefix, and for a
+`URef` command the dump is not a banner but *the expression being unified, on one line* —
+`debug_print_cmd` prints it with `debug_print_expr`. On `.declQuotPB_at` that line ran past the
+prefix, so the split found no banner, `last_meaningful()` returned the tail of the dump line, and
+the row recorded a fragment of `tsucc` arithmetic as the checker's decision.
+
+The reader now parses the layout instead of a prefix: it reads the stream in 1 MiB chunks, drops
+everything before the blank line that ends the command dump, and returns the line after it — a
+`\n\n` straddling a chunk boundary is carried one byte. Without a `stmt:` header the verdict is
+the first line, which covers the checker's standalone messages (`at %lX: 'thm' uses sorry`,
+`error: some theorems used sorry`) and parser failures before the first statement. Nothing after
+the verdict is read, which is what matters: the echo is up to 4.5 GB on
+`.TgtNodePres.kit._proof_1`. A 256 MiB cap on the scan bounds a pathological dump; on overflow
+the reason is the checker's stdout (empty in every rejection measured), not a dump fragment.
+
+Verified against measured output, not only constructed cases: the real dump `mm0-c` produced on
+`_proof_1` before it was killed (10 705 709 B of `heap overflow` dump, captured at
+`_build/conleche/mm0c-heap/real.err`) yields `at thm__proof_1: heap overflow`; a 1 107 819-byte
+synthetic `URef` line — the shape that defeated the old reader — yields its verdict; the
+boundary at 64 KiB, at 64 KiB + 1 MiB − 1, + 1 MiB, and the same two offsets one chunk later all
+yield the verdict; the no-header and empty-stream cases yield their line and `(no output)`. The
+sweep was restarted on this reader as well, so the failure histogram it exits with names
+classes instead of quoting derivations — the reason `§13.62c`'s closures could not be folded from
+the part-4 log.
+
+In the sweep it does read the checker's line. `§13.62j`'s fragment is now
+
+```
+mm0-c ✗ .declQuotPB_at: mm0-c: at sd1254: store overflow
+```
+
+— a named statement, the checker's own reason, and a class the histogram can count. What that
+verdict means is `§13.62l`.
+
+### 13.62l The second buffer: `.declQuotPB_at`'s store was 31 % short
+
+`§13.62k`'s verdict is a capacity fact of the same family as `§13.62j`'s heap, on a different
+buffer: the derivation is 10 570 rules and 3 838 assumptions, a 6 051 136-byte `full.mmb` against
+a 118 588 845-byte `full.mm0`, and what it runs out of is the checker's expression arena,
+`STORE_SIZE (1 << 26)` bytes — 64 MB. `§13.62j`'s `_proof_1` used 19 % of that arena; this one
+needs more than all of it. The `-2x` measurement build doubled only the heap, so a copy with
+`STORE_SIZE (1 << 27)` and `-DHIGHWATER` was built from the same sources (`_build/mm0-c-store2x`,
+`gcc -O2`, nothing else changed) and the artifact the sweep kept for the failed declaration — a
+non-pass leaves its work directory behind — checks at that size:
+
+**exit 0, 2.54 s wall, 208 892 KB peak**, and the counters say which buffer was binding:
+
+| buffer | highwater | size | used |
+| --- | --- | --- | --- |
+| store | **87 780 488** | 67 108 864 → 134 217 728 | 131 % of the default, 65 % of 2× |
+| proof heap | 5 433 | 131 072 | 4 % |
+| unify heap | 3 653 | 65 536 | 6 % |
+| stack | 423 | 65 536 | 0.6 % |
+| unify stack | 91 | 256 | 36 % |
+| hypothesis stack | 3 | 256 | 1 % |
+
+The shortfall is 20 671 624 bytes — 31 % of one buffer — and no other buffer reaches 6 % of its
+size (the 36 % is 91 entries of a 256-entry stack). So the row is *large*, not *wrong*: `store
+overflow` names the checker's constant, exactly as `heap overflow` did in `§13.62h`. Raising
+`STORE_SIZE` upstream is the same one-line question the heap answered, and the answer is the same:
+`STORE_SIZE (1 << 27)` now sits in `../mm0-rs/mm0-c/verifier_types.c` (committed there as
+`445757e`), and the normal build (`gcc -O2`, no `-D` flags) was installed over
+`~/.local/bin/mm0-c`. The installed binary re-verifies both artifacts: `.declQuotPB_at` **exit 0
+in 1.59 s, 208 900 KB peak**, and `§13.62j`'s `_proof_1` still **exit 0 in 1.97 s, 195 644 KB**, so
+the wider arena costs 64 MB more of static array (64 → 128 MB) and no time worth reporting.
+
+The whole pipeline was then re-run on that one declaration rather than trusting the checker stage
+alone: `--only` on `ConLeche.Model.declQuotPB_at`, a ledger of its own, `SCAN_MM0_C` on the
+installed build, in a transient unit capped at 12 G — **`pass ✓ .declQuotPB_at [thm] rules=10570
+assumptions=3838`, 87.1 s elapsed, 1/1 verified closures**. Its row is now in the live ledger
+(2 476 entries): the sweep is that file's only writer until it exits, so the row and its retained
+`stmt/` file were appended exactly as `ledger_append` writes them — one atomic append — instead of
+pointing a second scan at the same ledger.
+
+One consequence has to be stated where the fold reads it: the checker was replaced *while the
+sweep was running* (installed by `mv`, so the running process kept its old inode and no
+`ETXTBSY`), which means the rows it checked before 14:20 met `STORE_SIZE 2^26` and the rows after
+it meet 2^27. The exit histogram is therefore stamped across one checker rebuild — the only such
+boundary in it, and the reason a `store overflow` row can only come from the early part. Had it
+been left alone, the run would have been homogeneous; it was repaired on request, and the mixed
+histogram is cheaper than replaying 2 100 rows to recover a property that is now known.

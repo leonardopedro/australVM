@@ -228,7 +228,13 @@ and three runs on `master` were in flight at once, which is where the extra
 seven minutes went. That is the bound being too tight, not the tree being wrong;
 the fix was to raise it (90 minutes, with the measured split in the job's
 comment) and to give the workflow its concurrency group, so the slow job stops
-competing with a copy of itself. The two cases separate by duration: a
+competing with a copy of itself. On `master` that group queues rather than
+cancels (only pull-request runs still cancel a superseded run): a full run takes
+~80 minutes against a push cadence that cancels it in ~20, so cancelling there
+guaranteed that no run ever finished — measured 2026-11-25/26, 53 of 60 master
+push runs `cancelled` and 4 `success`. A master run in flight is now allowed to
+finish; a push during it replaces only the *pending* run, so intermediate
+commits still go untested and the newest one waits its turn. The two cases separate by duration: a
 superseded job dies within seconds of a newer push, a timed-out one dies on its
 bound to the minute.
 

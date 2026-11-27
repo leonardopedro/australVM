@@ -1,0 +1,29 @@
+# The exact stdout `scripts/avm-test-census` writes for each log fixture in its
+# `selftest`, one block per case: the annotation level, the two titles
+# (`avm-pkg test census` for the per-binary line and the did-not-compile line,
+# `avm-pkg test output` for the tail) and the message, byte for byte.
+#
+# The tail block holds the failure lines only: the `test result:` line and the
+# `Compiling`/`Running` progress lines are already on the page as the census
+# annotation, so repeating them would spend annotations on nothing new.
+#
+# `selftest` diffs its output against the matching block and fails on any
+# difference; it does not grep for substrings. That is why this file exists: a
+# failed step's log needs admin rights, so these annotations are how the job is
+# read, and the text a reader will see is reviewable in the repo instead of only
+# in a CI run.
+#
+# Edit by hand when the annotations are meant to change. There is deliberately
+# no regeneration flag: a script that rewrites the file it is checked against
+# can never report a drift.
+[green]
+::notice title=avm-pkg test census::avm_cas: test result: ok. 31 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out
+[red]
+::error title=avm-pkg test census::avm_pkg: test result: FAILED. 22 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
+::error title=avm-pkg test output::failures:
+::error title=avm-pkg test output::    eval::tests::rejects_a_bad_digest
+::error title=avm-pkg test output::error: test failed, to rerun pass `--lib`
+[compile-failure]
+::error title=avm-pkg test census::[avm-pkg] no test binary reported a result: the workspace did not compile
+::error title=avm-pkg test output::error[E0432]: unresolved import `crate::missing`
+::error title=avm-pkg test output::error: could not compile `avm-vmm` (lib) due to 1 previous error
