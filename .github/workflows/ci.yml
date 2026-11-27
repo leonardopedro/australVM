@@ -145,6 +145,25 @@ jobs:
       - name: make lint (clippy -D warnings + fmt --check)
         run: make lint
 
+      # The `Build and Test` job's demo step does not build
+      # (MODULE_BUILDER_SKIP_BUILD there), so the one configuration only it
+      # used to compile — the bridge with `--no-default-features --features
+      # unfer-kernel` — is checked here. `check` still fails on a
+      # feature-gated compile error, which is what that configuration can
+      # break in, and it writes no `.so`.
+      #
+      # It lives here rather than next to the demo because `make lint` above
+      # already ran cargo in check mode over the same dependency feature set,
+      # so only this crate is re-checked; in jit-stack the same command paid a
+      # cold release check (4.2 min, measured 2026-11-27 in run 45964358573
+      # step 19) because a release `cargo build` does not produce the
+      # check-mode units `cargo check` looks for. No `--release` here for the
+      # same reason, and it costs no coverage: the bridge carries no
+      # `cfg(debug_assertions)` code (`grep -c` over src/ is 0), so the
+      # profile does not decide what compiles.
+      - name: cargo check - the demo feature set still compiles
+        run: nix develop "git+file://$PWD#ocaml" -c cargo check --no-default-features --features unfer-kernel -p austral_cranelift_bridge --manifest-path safestos/cranelift/Cargo.toml
+
   # ---------------------------------------------------------------------------
   # Phase D: the Lean4 → DeltaNets → MM0 certificate gate (docs/lean4mm0.md §5).
   # Regenerates BOTH certificates (gap_certificate, layout_certificate) from
