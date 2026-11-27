@@ -12,6 +12,21 @@ end-to-end `build` (Austral source → plan.json + CPS → `cps2cell` → signed
 `.avm` cell in the store, §4.9), the bootstrap payload digests (§4.10), the
 hot-store latency probes and the Nix comparison (§4.12) all shipped.**
 
+**Review & v2 direction (2026-11-27):** A full code review of the
+Sprints 1–5 implementation (§7) surfaced concrete correctness,
+crash-safety, concurrency, and transport defects (including an L3
+`eval --remote` key mismatch, a GC crash-window ordering bug,
+multi-process pack/index races, `HotStore` concurrent accounting leaks,
+and serial uncompressed plain-HTTP transfers), as well as
+double-chunking and store-copy friction in the current
+`../graft/integrations/openshell/` shell wrapper. Sections §8–§9 specify
+the v2 architecture and Sprints 6–9 roadmap: unifying cold storage,
+transactional metadata, and immutable sync onto `../graft/` (`graft`,
+`cdc-volume`, `graft-workspace`), shaped by the decoupled control/data
+plane, per-ref causal consistency, LSM pack covers, and regional pack-URI
+caching of OpenAI's Pando
+(["Scaling Git at OpenAI"](https://openai.com/index/scaling-git-at-openai/)).
+
 This document is the execution record for the owner's avm-pkg engineering
 spec (received 2026-10-17). It tracks what was built, what was measured,
 what was deliberately designed differently and why, and exactly where the
@@ -835,3 +850,399 @@ since 2026-11-18, the two §3 hot-store rows as a smoke:
 either row regresses and attaches the measured report. Everything else in
 this plan stays a local-gate claim with the reproduction commands in §3;
 the workspace aggregate gate covers this tree's docs.
+
+## §7 Implementation review (2026-11-27)
+
+Code audit of Sprints 1–5 (`safestos/pkg/`, `lib/Totality.ml`,
+`lib/DerivAst.ml`, `stdlib/pkg/`, and the existing downstream bridge in
+`../graft/crates/avm-uploadd/` and `../graft/integrations/openshell/`).
+Everything recorded below is directly observed in the current files;
+none of the v2 work in §§8–9 is implemented yet.
+
+### §7.1 Correctness, crash-safety, and trust defects
+
+1. **L3 `eval --remote` key mismatch and per-node Tokio runtime
+   (`safestos/pkg/avm-cli/src/main.rs:666-679` vs
+   `safestos/pkg/avm-cas/src/remote.rs:207, 285-291`).**
+   `cmd_eval` probes `HEAD /manifests/<drv_hash>` for every value in
+   `graph.ids.values()`, whereas `cmd_push` (`main.rs:1341`) and
+   `Remote::push_manifest` (`remote.rs:205-207`) upload manifests under
+   `manifest.identity_digest()` (which hashes `name`, `version`,
+   `total_size`, `drv_hash`, `closure`, and `chunks`). Against any real
+   remote cache—including `../graft/crates/avm-uploadd/`—L3 lookups
+   always return 404. The CLI test (`main.rs:2787-2789`) masked the
+   mismatch by seeding the mock directly under `base_id` (`drv_hash`).
+   In addition, `cmd_eval` calls `block_on(...)` inside the per-node
+   loop (`main.rs:672`), constructing and tearing down a multi-threaded
+   Tokio runtime on every derivation node.
+2. **`ChunkStore::gc()` crash-window data loss and non-idempotent
+   recovery (`safestos/pkg/avm-cas/src/engine.rs:815-860`).**
+   `gc()` compacts live chunks into a fixed sibling path
+   `packs/.tmp-compaction.pack` opened with `create_new(true)` (line
+   819), persists `index/chunks.idx` pointing at `pack_id = 0`
+   (`p-00000000.pack`) at line 849, deletes every `p-00000001..N` pack at
+   lines 855–859, and only renames `.tmp-compaction.pack` over
+   `p-00000000.pack` at line 860. A crash between lines 849 and 860
+   leaves `chunks.idx` referencing the *old* `p-00000000.pack` with
+   wrong offsets after the other packs have already been unlinked, and
+   the leftover `.tmp-compaction.pack` causes every subsequent `gc()` to
+   fail with `EEXIST`. In addition, `gc()` decompresses and
+   re-compresses every live chunk one at a time via `self.get_chunk`
+   (`engine.rs:824`) instead of copying raw framed pack records.
+3. **Multi-process writer races (`safestos/pkg/avm-cas/src/engine.rs:586-595, 909-918`).**
+   `ChunkStore` holds only an in-process `Mutex` and takes no OS file
+   lock (`flock`). `scan_next_pack_id` + `OpenOptions::create_new(true)`
+   races across concurrent writer processes, and `atomic_write` uses a
+   fixed sibling `.tmp-write` path (no PID/nonce) without `fsync`ing the
+   parent directory after `rename`. Because `avm-pkg` mutates packfiles
+   and `chunks.idx` without an advisory lock,
+   `../graft/integrations/openshell/graft-avm-sync` (lines 118–146)
+   cannot hardlink or read in place and has to copy the entire store and
+   retry up to three times while polling file sizes and mtimes.
+4. **`HotStore::hydrate` concurrency and budget-accounting leaks
+   (`safestos/pkg/avm-cas/src/hot_store.rs:128-135, 267-302`).**
+   Concurrent `acquire()` calls for the same uncached `manifest_hash`
+   have no singleflight deduplication: both enter `hydrate()`, both
+   allocate and copy the full anonymous mapping, both increment
+   `self.usage.fetch_add(total)` (line 267), and the second
+   `self.cells.insert(...)` (line 274) silently overwrites the first map
+   entry—permanently leaking `total` bytes in `usage`. Furthermore,
+   `make_room()` (lines 280–302) checks and evicts *before* hydration
+   without reserving capacity, so concurrent hydrations can overshoot
+   `self.capacity`, and each eviction performs an $O(N)$ linear scan over
+   `DashMap`.
+5. **Incomplete signature trust enforcement
+   (`safestos/pkg/avm-cli/src/main.rs:919-938, 1355-1390, 1451`).**
+   `hydrate_get` hardcodes `enforce_signatures = false` (line 1451),
+   `cmd_pull` checks `identity_digest` only and provides no
+   `--allow-signer` Ed25519 allowlist check (forcing
+   `../graft/crates/avm-uploadd/src/main.rs:216-362` to duplicate
+   `avm-cas`'s binary manifest v1/v2 parser), and `cmd_load` only
+   requires `--key` when `--provider` is passed (line 932), leaving
+   single-cell `load` unverified unless the caller remembers `--key`.
+6. **`DerivAst.write_json` silent corruption fallback and non-atomic
+   write (`lib/DerivAst.ml:214-237`).**
+   When merging into an existing `plan.json`, `write_json` catches
+   `Yojson.Json_error` and `Yojson.Safe.Util.Type_error` and silently
+   treats the file as `[]`—discarding existing plan entries on a parse
+   error instead of failing loudly—and writes the output directly with
+   `open_out` rather than atomic temp-file + rename. (Minor code typo:
+   field `totalitity_status` at line 70.)
+
+### §7.2 Scalability, transport, and Graft impedance mismatches
+
+1. **Monolithic `chunks.idx` rewrite amplification and unbounded L0 pack
+   growth (`safestos/pkg/avm-cas/src/engine.rs:427-445, 585-629, 803`).**
+   Every `put_buffer` or `put_chunk_batch` creates a new
+   `p-XXXXXXXX.pack` and rewrites the entire sorted `index/chunks.idx`
+   ($O(N \log N)$ write amplification as the store grows). Because `gc()`
+   returns immediately when `dead == 0` (line 803), append-heavy stores
+   accumulate thousands of small L0 packfiles with no non-GC compaction.
+2. **$O(M)$ manifest directory scans and $O(N^2)$ closure recomputation
+   (`avm-cli/src/main.rs:646-657, 1420-1425`,
+   `avm-eval/src/graph.rs:151-156`, `avm-eval/src/memo.rs:190-208`).**
+   Both `cmd_eval` and `store_cell_by_derivation` linearly read and
+   decode every `manifests/*.mfx` file on disk. L0 `StoreClosures` keeps
+   only one `(drv_hash, closure)` per package name
+   (`entry(...).or_insert(...)`, picking whichever manifest hex sorts
+   first), so having two versions or configurations of the same package in
+   the store breaks L0 hits for one of them. Each L0 check calls
+   `plan.closure_digest(name)` with a fresh `BTreeMap` memo (`graph.rs:152`),
+   making multi-miss evaluations $O(N^2)$ over deep DAGs, and true
+   $O(1)$ subtree-skipping still lacks a `plan.lock` carrying pinned
+   inputs/ids.
+3. **Whole-payload RAM buffering and non-resumable transfers
+   (`avm-cli/src/main.rs:323`, `avm-cas/src/engine.rs:549`,
+   `avm-cas/src/remote.rs:148-182`).**
+   `cmd_put` reads entire files into RAM with `std::fs::read`, and
+   `pull_chunks` buffers all downloaded chunks in `Vec<Vec<u8>>` before
+   calling `put_chunk_batch`, losing all downloaded progress if the
+   transfer is interrupted.
+4. **Serial, uncompressed, plain-HTTP/1.1 remote sync
+   (`safestos/pkg/avm-cas/src/remote.rs:33, 118-131, 149-179`).**
+   `push_chunks` and `pull_chunks` issue sequential `PUT`/`GET` requests
+   one chunk at a time without pipelining or concurrency, send
+   uncompressed plaintext on the wire (`zstd` level 3/19 remains
+   deferred, §4.5), and use plain HTTP with no TLS, SigV4, or
+   `Authorization` header support. That forced
+   `../graft/crates/avm-uploadd/src/main.rs:3-8` to place a 64-hex
+   bearer token inside the URL path prefix (which `cmd_push`/`cmd_pull`
+   echo back in JSON via `remote.base()`).
+5. **Double-chunking and triple-copying in the current Graft OpenShell
+   bridge (`../graft/integrations/openshell/graft-avm-sync`,
+   `README.md:272-273`).**
+   Today `avm-pkg` chunks payloads with in-house FastCDC (16/64/256 KiB,
+   SplitMix64 gear table) + LZ4 into mutable packfiles; `graft-avm-sync`
+   takes a full copy of the store directory; `workspace update publish`
+   then re-chunks the already-LZ4-compressed packfiles and rewritten
+   `chunks.idx` with `cdc-volume`'s FastCDC v2020 (8/32/128 KiB) +
+   optional zstd; and `workspace update deploy` materializes a third tree
+   for virtiofs. Because LZ4 framing shifts and monolithic `chunks.idx`
+   rewrites do not align with Graft's chunker (and `bin/avm-pkg` shares
+   the release tree), adding a 30-byte signed guest package uploaded 283
+   Graft chunks (11,914,812 bytes) with only 2 chunks reused
+   (`../graft/integrations/openshell/README.md:272-273`).
+
+### §7.3 Remaining executor, CLI, and frontend gaps
+
+1. **`Isolation::probe()` overhead (`safestos/pkg/avm-exec/src/runner.rs:99-132, 187-192`).**
+   `Runner::new` runs `Isolation::probe()` on every instantiation,
+   spawning up to three throwaway `unshare` child processes instead of
+   caching the host capability probe in a process-wide `OnceLock`.
+2. **Incomplete mount-namespace surgery, JSON text handoff, and
+   single-arch linking (`runner.rs:21-28`, `loader.rs:210-245`,
+   `linker.rs:69-105`).**
+   Inside the mount namespace, host `/usr`, `/bin`, and `/tmp` remain
+   visible rather than hidden behind `pivot_root` + minimal input bind
+   mounts; `loader::render_image` hex-encodes machine code into
+   `cell.json` (2× size + copy) instead of handing off `HotStore` /
+   `memfd` mappings; and `linker.rs` implements x86_64 relocations only
+   (no `aarch64` relocation kinds despite `ARCH_AARCH64` in
+   `cell_builder.rs:43`).
+3. **CLI flag parser quirks (`safestos/pkg/avm-cli/src/main.rs:257-277, 329, 351, 1458`).**
+   `VALUE_FLAGS` omits `--acquire`, `--fault-ins`, and `--size`;
+   `cmd_stat` and `cmd_get` read `args.first()` instead of
+   `positionals(args)` (failing if flags precede the manifest hash); and
+   `cmd_put` reports `"bad --seed"` for `--sign`.
+4. **Bootstrap recipe execution and totality expressiveness
+   (`stdlib/pkg/Bootstrap.aum`, `lib/DerivAst.ml`, `lib/Totality.ml`).**
+   `Bootstrap.aum` pins source digests and exports `plan.json`, but
+   cannot invoke `Stdenv.stdenv(...)` in constant initializers (since
+   `DerivAst.ml` only decodes literal record constructors), `Totality.ml`
+   v1 rejects all `while` loops and all recursion including structurally
+   descending folds, and the four bootstrap C packages (`tcc` → `musl` →
+   `busybox` → `hello`) are not yet built end-to-end inside the hermetic
+   runner.
+
+---
+
+## §8 Target v2 architecture: Graft-backed storage & Pando-inspired package sync
+
+To resolve §7 cleanly and eliminate the copy/re-chunking boundary with
+`../graft/`, v2 replaces `avm-pkg`'s bespoke mutable pack/index store and
+serial plain-HTTP sync with a **Graft-backed storage and sync layer**
+designed around the scaling principles of OpenAI's **Pando**
+(["Scaling Git at OpenAI"](https://openai.com/index/scaling-git-at-openai/),
+November 2026).
+
+### §8.1 Architectural synthesis (Pando → `../graft/` → `avm-pkg` v2)
+
+| Pando principle ("Scaling Git at OpenAI") | `../graft/` primitive | `avm-pkg` v2 design |
+|---|---|---|
+| **Decouple negotiation/control plane from immutable byte delivery (`packfile-uris`)** | `graft` volume + `graft-sqlite` metadata catalog (`crates/graft-sqlite`, `graft-workspace/src/catalog.rs`); `UpdateRepo` over `fs:` / `s3:` / `http2:` / `https:` / `quic:`/`h3:` with HTTP `Range` (`update.rs`) | Metadata lookup and derivation resolution happen in a small Graft catalog volume; clients never ask a server to assemble bespoke packs on the fly—they fetch pre-built immutable pack covers by URI + byte range. |
+| **Per-reference serializability & causal consistency (no global repo lock)** | Graft single-writer SSI transactions (`VolumeWriter::commit` / `VolumeConcurrentWrite`) + append-only "bytes before rows" (`WORKSPACE_LANES_PLAN.md §1`) | Package publishing updates per-channel / per-agent refs (`refs/<channel>/<pkg>`, `refs/agents/<id>/<pkg>`) with conditional CAS commits. Concurrent builds on unrelated refs never contend or lock the store; readers see causally complete closures. |
+| **Zero-unpacking L0 pushes + LSM geometric background compaction (`L0 → L1 → … → L4`)** | Immutable FastCDC objects + `UpdateRepo` `publish`/`gc --grace-secs` (`update.rs`) + `cdc-volume` reachability GC (`gc.rs`) | Each push/build lands as one immutable content-addressed L0 pack (`<blake3>.pack`) without rewriting a global `chunks.idx`. Background workers compact L0 packs into geometrically larger zstd-compressed covers (`L1..L3`) with sorted indexes, compact chunk filters (Bloom/XOR), and grace-period retirement—turning fetch planning into $O(\log \Delta)$ cover selection. |
+| **Regional consistent-hashing caches ("Express")** | Immutable content-addressed pack covers + `UpdateRepo` static HTTP/2 & HTTP/3 range client (`http2:`/`https:`/`quic:`/`h3:` + `--ca-file`) | Because pack covers and chunks are immutable and content-addressed, consistent-hashing regional HTTP caches / CDNs can serve 99%+ of CI and OpenShell fleet reads straight from cache without hitting origin S3 or unpacking. |
+| **Bounded ref advertisement + skip-list / lazy index reads** | Graft `volume_pull` (advances `SyncPoint` only; `CDC_STORE_PLAN.md §2`) + contiguous index-frame placement (`cdc-volume` ~285 KiB cold range read in 2 requests) | Clients subscribe to scoped channel refs + `plan.lock` rather than scanning every manifest in the store; edge evaluators pull only the Graft catalog pages they touch lazily on demand. |
+| **Zero-downtime read/write-through proxy rollout** | `StoreBackend` + `RemoteTransport` trait boundary in `avm-cas`, plus `avm-uploadd` staging seam | Existing v1 local stores keep working; a proxy/adapter layer reads and writes through to Graft-backed stores without a flag-day migration. |
+
+### §8.2 Three-layer topology
+
+```text
+  [ Austral / DerivAst / plan.lock ]
+                 │
+                 ▼
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ Layer 1: Ephemeral Hot Store (avm-cas/src/hot_store.rs)             │
+  │  - Anonymous read-only mmap, singleflight hydration, atomic budget  │
+  │  - < 1 µs acquire, < 15 ms 50 MiB fault-in, 0 bytes cold writeback  │
+  │  - Mandatory Ed25519 allowlist check before mapping                 │
+  └──────────────────────────────▲──────────────────────────────────────┘
+                                 │ hydrate (verified chunks / ranges)
+  ┌──────────────────────────────┴──────────────────────────────────────┐
+  │ Layer 2: Control Plane — Graft Transactional Catalog                │
+  │  (`../graft/crates/graft` + `graft-sqlite`, lazy `volume_pull`)     │
+  │  - `refs`:       (channel/agent, pkg) -> manifest_id (per-ref CAS)  │
+  │  - `derivations`: (drv_hash, closure) -> (manifest_id, signer)      │
+  │  - `manifests`:  manifest metadata + Ed25519 signature              │
+  │  - `pack_covers`: (level, pack_hash, chunk_filter, index_range)     │
+  └──────────────────────────────▲──────────────────────────────────────┘
+                                 │ immutable pack covers + byte ranges
+  ┌──────────────────────────────┴──────────────────────────────────────┐
+  │ Layer 3: Data Plane — `../graft` Unified Object & Sync Engine       │
+  │  - Unified chunker profile (Manifest v3):                           │
+  │      profile 1: legacy splitmix-16-64-256 (v1/v2 read compat)       │
+  │      profile 2: fastcdc-v2020-8-32-128 (`cdc-volume/src/chunker.rs`)│
+  │  - Public/shared cache (`UpdateRepo`): unkeyed BLAKE3, zstd packs,  │
+  │    `fs:` / `s3:` / `http2:` / `https:` / `quic:`/`h3:` + `Deployment`│
+  │    immutable symlink trees for OpenShell virtiofs DAX shares        │
+  │  - Private/encrypted profile (`cdc-volume`): keyed BLAKE3 +         │
+  │    per-page XChaCha20-Poly1305 AEAD for proprietary/firmware cells  │
+  └─────────────────────────────────────────────────────────────────────┘
+```
+
+Key v2 storage decisions:
+
+1. **Manifest v3 chunker-profile unification (zero double-chunking).**
+   Introduce Manifest format 3 adding a `chunker_profile: u8` field:
+   profile `1` preserves v1/v2 `splitmix-16-64-256` (`avm-cas/src/chunker.rs`)
+   for existing stores and digests; profile `2` uses
+   `fastcdc-v2020-8-32-128`, matching `../graft/crates/cdc-volume/src/chunker.rs`
+   (`MIN_CHUNK = 8 KiB`, `AVG_CHUNK = 32 KiB`, `MAX_CHUNK = 128 KiB`).
+   Because `avm-pkg` and `graft-workspace`'s `UpdateRepo` then compute
+   the exact same chunk boundaries and plaintext BLAKE3 hashes,
+   publishing a store into Graft or OpenShell requires zero re-chunking
+   and zero LZ4 packfile copying.
+2. **Immutable L0 packs + LSM covers (no global `chunks.idx` rewrite).**
+   Every `put` or `build` emits one immutable pack object
+   `packs/L0/<pack-blake3>.pack` containing zstd/LZ4/raw chunk frames
+   plus a sorted trailing chunk offset index and Ed25519 signature, then
+   atomically commits its metadata row into the Graft catalog (bytes
+   before rows). Unrelated agents/builders commit to their own refs in
+   $O(1)$ without locking a global index. Background compaction merges
+   small L0 packs into `L1 → L2 → L3` covers with Bloom/XOR presence
+   filters so fetch planners can cover a causal delta in $O(\log \Delta)$
+   pack URIs instead of per-chunk HTTP round-trips.
+3. **Two storage profiles, one `StoreBackend` contract.**
+   *Public / shared binary caches* use unkeyed BLAKE3 chunks and
+   immutable pack covers over `graft-workspace`'s `UpdateRepo` (`fs:`,
+   `s3:`, `http2:`/`h2c:`, `https:`, `quic:`/`h3:` with `--ca-file`) and
+   `deployment.rs` atomic `current` symlinks for OpenShell virtiofs DAX
+   shares. *Private / encrypted cells* (e.g., proprietary firmware or
+   private workspace artifacts) use `cdc-volume`'s keyed BLAKE3 +
+   per-page XChaCha20-Poly1305 AEAD over Graft volumes with zero change
+   to `HotStore` or `avm-exec`.
+
+### §8.3 Workspace separation & integration seam
+
+`safestos/pkg/Cargo.toml` is deliberately standalone (Cargo resolver 2,
+offline crate cache, no external path deps) and CI runs its `avm-pkg` job
+without `../graft/`. `../graft/` currently uses Cargo resolver 3 and
+pulls `opendal` from git (`../graft/Cargo.toml:2, 67-71`). To get full
+Graft integration without breaking standalone CI:
+
+1. **Shared wire crate (`avm-manifest`).** Extract Manifest v1/v2/v3
+   binary encoding/decoding, immutable pack trailer parsing, and Ed25519
+   signature verification into a zero-heavy-dep crate usable by both
+   `safestos/pkg` and `../graft/`, retiring the duplicated parser in
+   `../graft/crates/avm-uploadd/src/main.rs:216-362`.
+2. **Seam A — Out-of-process Graft driver (`graft-avm` in
+   `../graft/crates/graft-avm/`).** Mirroring `cps2cell` (`AVM_GRAFT_DRIVER`
+   or Unix-domain socket RPC), `avm-pkg` keeps zero external Cargo path
+   dependencies in default builds while delegating remote sync, Graft
+   catalog transactions, LSM pack compaction, S3/HTTP2/HTTP3 transfers,
+   and OpenShell deployment publishing to `graft-avm`. Read-only
+   OpenShell guests still read immutable packs and a read-only catalog
+   snapshot straight off the virtiofs DAX share without needing the
+   driver running in the guest. This directly replaces `avm-uploadd`'s
+   URL-token cache and `graft-avm-sync`'s store-copy retry loop.
+3. **Seam B — Optional in-process backend (`--features graft-store`).**
+   Once `../graft` pins `opendal` to a crates.io release and aligns
+   Cargo resolver/MSRV, an optional feature-gated backend can embed the
+   driver in-process behind `avm-cas`'s `StoreBackend` + `RemoteTransport`
+   traits, tested in a dedicated cross-repo CI job alongside `graft`'s
+   existing `australVM` checkout smoke.
+
+---
+
+## §9 Phased v2 execution roadmap (Sprints 6–9) & acceptance gates
+
+### Sprint 6 — Correctness, crash-safety, and security hardening (standalone `safestos/pkg` + `lib/DerivAst.ml`)
+
+- **Task 6.1: Fix L3 `eval --remote` and async runtime reuse.**
+  Add derivation-index lookup (`HEAD`/`GET /derivations/<drv_hash>` and
+  batched `POST /derivations/lookup`) returning the canonical
+  `manifest_id`, reuse a single Tokio runtime with bounded concurrency in
+  `cmd_eval`, and replace the `drv_hash`-seeded mock test
+  (`main.rs:2787-2789`) with an end-to-end `build`/`put --drv` → `push`
+  → `eval --remote` test against a real manifest-id-keyed cache.
+- **Task 6.2: Crash-safe `ChunkStore` and `gc()`.**
+  Write compacted chunks to a fresh `pack_id` (or unique nonce pack) via
+  raw framed copy (no decompress/recompress), `sync_data()` the new pack
+  and its parent directory, atomically swap `chunks.idx` using a
+  PID+nonce temp file + parent-dir `fsync`, and unlink superseded packs
+  *only after* the new index is durable. Add advisory `flock` locking
+  for multi-process writers and support non-GC pack consolidation when
+  many small packs accumulate even with `dead == 0`.
+- **Task 6.3: `HotStore` singleflight, atomic budget, and mandatory signer trust.**
+  Deduplicate concurrent `hydrate()` calls per `manifest_hash` via an
+  in-flight singleflight map so `usage` is incremented exactly once;
+  reserve budget atomically before hydrating; replace the $O(N)$ victim
+  scan with a Clock / indexed-LRU structure. Wire `--allow-signer` /
+  `--key` / `enforce_signatures` across `get`, `pull`, and single-cell
+  `load`.
+- **Task 6.4: Streaming I/O, concurrent compressed transport, and CLI/OCaml fixes.**
+  Stream `put` from `std::io::Read` (fixing whole-file RAM buffering);
+  persist `pull_chunks` in bounded incremental batches with resume; add
+  zstd wire codec + bounded concurrent HTTP transfers + `Authorization:
+  Bearer` header support (retiring URL-path tokens). Fix `VALUE_FLAGS`
+  and `positionals(args)` in `avm-cli`, fix `cmd_put` `--sign` error
+  wording, cache `Isolation::probe()` in `OnceLock`, and make
+  `DerivAst.write_json` fail loudly on malformed existing `plan.json`
+  with atomic temp+rename (and fix the `totalitity_status` field name).
+- **Task 6.5: `avm-eval` scaling and `plan.lock`.**
+  Support multi-version `(name, closure) -> drv_hash` entries in
+  `ClosureIndex`, share the memo table across `Plan::closure_digest`
+  calls in one evaluation (removing $O(N^2)$ re-walks), and introduce an
+  explicit `plan.lock` pinning `(name, drv_hash, manifest_id, closure)`
+  for $O(1)$ subtree-skipping warm evaluation.
+
+### Sprint 7 — Graft storage unification & zero-double-chunking (`avm-cas` traits + `../graft/crates/graft-avm`)
+
+- **Task 7.1: Storage/transport traits, `avm-manifest`, and Manifest v3.**
+  Factor `StoreBackend` and `RemoteTransport` traits out of `avm-cas`;
+  extract `avm-manifest` for shared v1/v2/v3 parsing and Ed25519 checks;
+  add Manifest v3 `chunker_profile = 2` (`fastcdc-v2020-8-32-128`,
+  matching `../graft/crates/cdc-volume/src/chunker.rs`).
+- **Task 7.2: Immutable L0 packs and Graft catalog volume.**
+  Implement immutable content-addressed L0 pack files (`<blake3>.pack`
+  with sorted trailing index + signature) and the `graft-avm` catalog
+  SQLite schema (`refs`, `derivations`, `manifests`, `pack_covers`) over
+  `graft-sqlite` with lazy `volume_pull` read replicas.
+- **Task 7.3: Unified `UpdateRepo` sync & zero-copy OpenShell deployment.**
+  Route `push`/`pull`/`eval --remote` through `graft-avm` over
+  `UpdateRepo` (`fs:`, `s3:`, `http2:`, `https:`, `quic:`/`h3:` +
+  `--ca-file`) and optional `cdc-volume` encrypted volumes. Replace
+  `avm-uploadd` + `graft-avm-sync`'s store-copy retry loop with direct
+  authenticated pack upload + atomic `deployment.rs` symlink switching
+  over immutable packs (zero store copy, zero double-chunking).
+
+### Sprint 8 — Pando-inspired horizontal sync (per-ref concurrency, LSM covers, pack-URI caches)
+
+- **Task 8.1: Per-ref concurrency and causal closure validation.**
+  Coordinate publishes per ref (`refs/<channel>/<pkg>`,
+  `refs/agents/<id>/<pkg>`) with conditional CAS updates and causal
+  closure verification (every referenced dependency manifest/pack must be
+  committed before the ref moves), keeping ref advertisement scoped to
+  subscribed channels + `plan.lock`.
+- **Task 8.2: Background LSM geometric pack compaction (`L0 → L1 → L2 → L3`).**
+  Add an asynchronous compactor that merges L0 packs into geometrically
+  sized zstd-compressed covers (`L1..L3`) with sorted chunk indexes,
+  compact Bloom/XOR filters, and grace-period cleanup (`--grace-secs`),
+  keeping lower covers available for $O(\log \Delta)$ fetch planning.
+- **Task 8.3: Fetch planner, `packfile-uris`-style range fetch, and Express cache.**
+  Return minimal pack-cover URIs + byte ranges for a client's causal
+  delta (`have`/`want` over ref versions); stream ranges in parallel over
+  HTTP/2 and HTTP/3; add a consistent-hashing regional cache proxy
+  (plus a read/write-through proxy adapter over legacy v1 caches).
+
+### Sprint 9 — Sandbox, multi-arch, and end-to-end bootstrap completion
+
+- **Task 9.1: Hermetic root isolation, zero-copy image handoff, and `aarch64` linking.**
+  Add `pivot_root` + minimal read-only input bind mounts inside the
+  mount namespace (closing the `/usr`/`/bin`/`/tmp` visibility caveat in
+  `runner.rs:21-28`), replace hex JSON `cell.json` with `memfd` /
+  `HotStore` descriptor handoff, and implement `aarch64` relocations in
+  `avm-exec/src/linker.rs`.
+- **Task 9.2: Helper-folded recipes, bounded recursion totality, and live bootstrap builds.**
+  Evaluate pure `Stdenv.stdenv(...)` helpers in `DerivAst.ml` (or a
+  compile-time constant evaluator), add structurally descending fold /
+  bounded-loop verification to `Totality.ml`, and execute the full
+  four-stage `Bootstrap.aum` build (`tcc` → `musl` → `busybox` → `hello`)
+  inside the hermetic runner.
+
+### §9.1 v2 Acceptance criteria
+
+All §3 v1 acceptance gates remain mandatory (with `HotStore` acquire < 1 µs
+and 50 MiB fault-in < 15 ms). Sprints 6–9 add the following falsifiable gates:
+
+| Subsystem | Metric | v2 Acceptance Target |
+|---|---|---|
+| **L3 Remote Eval** | Correctness & latency | `build`/`put --drv` → `push` → `eval --remote` returns `remote_hits` matching cold `drv_hash` without pre-seeding `drv_hash` keys; 1,000-node remote probe uses 1 runtime and batched lookup. |
+| **Crash-Safety (`gc` / compaction)** | Zero data loss | `SIGKILL` injected at any point during `gc()` / LSM compaction / `push` loses 0 committed manifests or refs; subsequent open and compaction succeed without manual `.tmp` cleanup. |
+| **HotStore Concurrency** | Accounting exactness | 16 concurrent threads calling `acquire()` on overlapping uncached and evicting cells produce 0 `usage` budget leaks (`usage == sum(resident cell sizes)`) and `usage <= capacity`. |
+| **Zero Double-Chunking (OpenShell)** | Sync efficiency | Adding a 30-byte signed cell to a 12 MiB store and running Graft sync uploads **< 64 KiB** of new chunk data (vs. 11.9 MB in v1) with zero store-copy retries. |
+| **Pando-style Concurrency** | Per-ref throughput | 16 concurrent agents pushing distinct `refs/agents/<id>/<pkg>` experience **0** cross-ref lock conflicts; each ref commit is $O(1)$ metadata work. |
+| **Remote Sync & Caching** | Latency & hit rate | Cold 50 MiB pull over 60 ms emulated RTT via pack-URI HTTP/2 + HTTP/3 range fetch improves materially over serial HTTP/1.1 baseline; regional consistent-hashing cache achieves **≥ 99 %** byte hit rate across repeated CI/fleet pulls. |
+| **Lazy Catalog Scale** | Edge metadata bytes | Cold edge `eval` of a single target against a 10,000-package Graft catalog pulls **< 512 KiB** of catalog/index pages via lazy `volume_pull`. |
+| **Bootstrap End-to-End** | Live hermetic build | `tcc` → `musl` → `busybox` → `hello` build cleanly inside the capability-gated runner (`Execute` + no `NetworkCap` after fetch), yielding verifiable signed `.avm` / output cells. |
