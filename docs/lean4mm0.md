@@ -5896,6 +5896,25 @@ cgroup of `MemoryMax=20G` + `MemorySwapMax=4G`, a 1260 s cap (`probe-10gib.sh`):
 79 re-measured; **53 close** at 20 G, so for them the `10 GiB`, `6 GiB` bound was the limit: those rows are over that budget, not out of reach; **26 are killed** by the cgroup at 20 G + 4 G of swap, which is the whole margin on this 30 GB host, so no bound below its ceiling closes them: out of reach.
 <!-- 13.62c-sweep:end -->
 
+**The rows that did not close at 20 G, asked at the host's own ceiling.** A 24 G probe cannot
+be answered on this machine, and that is measured rather than assumed: a ballast in a 24 G
+cgroup with `MemorySwapMax=0` touched 21.4 GiB, was killed there, and left `Memory peak:
+21.4G` in the unit's record. So the 20 over-10-GiB rows the 20 G probe had recorded as
+out of reach were re-run at **21 G, swap 0**, one at a time (`PROBE_MEM_GB=21
+PROBE_SWAP_GB=0`, the same script, its own `probe-21gib.log`):
+
+| verdict | rows | what it means |
+| --- | ---: | --- |
+| closes | 1 | `genMinorTower`, 421 s, 20.5 GB peak, 33 995 024-byte `.mmb` — over budget, not out of reach |
+| host-bound | 2 | killed at 20.70 GB (`genFit1_core`) and 19.2 GB (`genFit2_core`) of a 21 G cap: the charge never reached the unit's bound, so the host ended them |
+| at the 21 G cap | 17 | still out of reach, and still below the 24 G that was asked for |
+
+Two things follow. The 20 G class was *mostly* budget-limited but not entirely: one of its rows
+needs 21 G, which is the only verdict here that a bigger bound changed. And a kill below the
+unit's own cap is not a verdict at all — `Memory peak` is the group's charge, so a peak that
+stops short of `MemoryMax` says the machine ran out first, which is why the probe now labels
+those rows `host-bound` instead of folding them into `out of reach`.
+
 **Six runs, joined by declaration.** The block above is a union, not one run. The sweep that
 started at 12:30 was ended by the kernel's OOM killer at 15:39 with 1 510 of 3 975 declarations
 left (`systemctl` recorded `oom-kill`; the unit peaked at 10.3 GB, with a test scan of mine
