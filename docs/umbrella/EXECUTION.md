@@ -1551,12 +1551,68 @@ that also names modules (exit 2 for the grammar error, 1 for the operational
 one). The CLI test writes a scalar document with a fake `cargo` on PATH and
 requires exit 0 plus the rendered `rs_scale__adapter` wrapper and its native
 signature, with the cargo marker absent; a comment-only document is refused with
-`no adapter blocks`. `cargo test --offline --lib cli` → 17 passed and
-`cargo test --offline --test cli` → 8 passed.
+`no adapter blocks`. Re-measured 2026-11-27 with the reduced bridge features
+(`cedar,tier1-rs`, because the sibling `unfer` checkout is mid-merge):
+`cargo test --offline --lib cli` → **20 passed** (the earlier 17 predates U18's
+two cache-parser cases and the new build-pairing case) and
+`cargo test --offline --test cli` → **9 passed** (the render test plus the
+build test below).
 
 This is rendering, not building: it does not compile the generated source, link
 a provider, or choose a provider generation. Those stay on the build path
 (`adapters::build_at`, called by a module run).
+
+**Building the wrappers from the document (2026-11-27).**
+`--descriptor-document <file> --build-wrappers <dir> --provider <lib>` is the
+same renderer plus the build step: the document's blocks are parsed by the
+build path's readers (`abi scalar`, `abi buffer`, `abi handle` and `abi text`)
+and handed to `adapters::build_at` at generation 1, with the named provider
+linked by absolute path. No front-end, module, cargo build or JIT is involved;
+the report is a `wrappers_built` event carrying the count, generation, artifact
+path and exported symbols. The grammar makes the pairing explicit: exactly one
+of `--emit-wrappers` and `--build-wrappers`, `--build-wrappers` requires
+`--provider`, and `--provider` without a build is refused, so neither path can
+silently ignore the other. Evidence: reduced-feature
+`cargo test --offline --lib cli` → **20 passed** and
+`cargo test --offline --test cli` → **9 passed**. The new integration test
+compiles a provider cdylib with `rustc` (`rs_scale(x: f64) -> f64` returning
+`x * 3.0`), writes a one-block descriptor document, runs the real binary, then
+dlopens `<dir>/libumbrella_adapters_1.so`, resolves `rs_scale__adapter` and
+requires `1.5 → 4.5` — so the measurement is the exported wrapper's behaviour,
+not its source text.
+
+Limitations: the artifact is generation 1 of a fresh process, so the path is
+for a user build that will load that crate itself; it is not a reload path and
+nothing retires or drains a previous build. Provider admission, trust pins and
+manifest authorization are not consulted here — the provider is a link input,
+not an admitted `ProviderSet` image — so this path says "these wrappers compile
+and behave", not "this provider is trusted". It needs `rustc` on `PATH` and the
+bridge rlib beside the umbrella executable, exactly like the module-run build.
+
+**Text transport `abi text 1` (2026-11-27).** A text block names one `symbol`,
+one `target`, `params Text` and `returns Text`. The wire convention is two
+words in (pointer, length) and one boxed pair out: the wrapper validates UTF-8,
+calls the provider's real `extern "C" fn(&str) -> String`, and returns a
+`#[repr(C)]` pair of `(ptr, len)` that the caller reads at offsets 0 and 8 and
+releases with `<symbol>__text_free`. Null is the refusal (a null pointer with a
+non-zero length, invalid UTF-8, or a length that cannot index the host); the
+empty answer is a non-null pair of length 0. Evidence:
+`cargo test --offline --test text_adapters` → **3 passed**: a provider written
+as an ordinary Rust `&str -> String` function is built to a cdylib, the wrapper
+is rendered, compiled and dlopened, and `"hello"` / `"héllo"` / `""` come back
+byte-exact with multi-byte text measured in bytes; invalid UTF-8 and a null
+pointer with a length are nulls; a read-only grant of the shape to more than
+one text parameter, a scalar parameter, a non-`Text` return, an unknown
+transport version and an unknown field are each refused by name.
+
+Limitations: this is the generator and ABI half. The compiler emits neither an
+`abi text` block nor the two-word argument convention, so a module built from
+source cannot yet declare a `Text`/`String` import; the module-run path does not
+read text blocks. The shape is fixed at one borrowed `&str` in and one owned
+`String` out — several text parameters or a scalar beside text need a wire
+convention this version does not have, so they are refused rather than guessed.
+A provider panic crosses the C-ABI boundary and aborts, so it is not mapped to
+the null refusal.
 
 **Retained instance callbacks and reload retirement (2026-11-25).** A `__with`
 callback is call-scoped and one-shot. A provider that keeps the pointer needs an
@@ -2212,3 +2268,78 @@ project executes a network call yet); NET03's redirect is an executed loopback
 fixture, while a real proxy hop and a cross-instance socket-token reuse are not
 fixtured; NET05 is measured for handle revocation, not for a socket token reused
 by another instance.
+
+## U22 — a capability workflow example (bounded start, 2026-11-27)
+
+`examples/modules/cap_fs/` is the start of the real capability workflow: the
+instance root is that directory, the only approved subtree is `data/` with the
+`read` right, and the state root itself carries no rights. `./run.sh` builds
+`safestos/cranelift/src/bin/capfsdemo.rs` and runs it over the example:
+`rs_cap_open_root(1)` names the approved root, `rs_cap_read` reads
+`data/records.txt` into a caller buffer and the bytes are compared to a direct
+`std::fs::read` of the same file (the independent oracle), `../outside/sentinel.txt`
+must return exactly `CAP_ERR_REFUSED`, `outside/sentinel.txt` must be unchanged
+afterwards, and a write under the read grant must be refused without creating a
+file.
+
+Measured 2026-11-27 (reduced bridge features `cedar,tier1-rs` because the
+sibling `unfer` checkout is mid-merge): `bash examples/modules/cap_fs/run.sh` →
+exit 0 with
+
+```
+granted read: data/records.txt -> 23 byte(s), identical to a direct std::fs::read
+denied read: data/../outside/sentinel.txt -> refused (code -5), no bytes copied
+outside sentinel: unchanged at …/outside/sentinel.txt (17 byte(s))
+write under a read grant: refused (code -5), no file created
+capfs workflow: granted read matched, traversal refused, sentinel intact
+```
+
+The read is genuinely mediated by the capability (handle + relative path, the
+`rs_cap_*` boundary a module calls), and the traversal names a file the process
+could read directly but the granted subtree does not contain, so the refusal is
+about the capability rather than filesystem access.
+
+Limitations: this measures the capability boundary, not the module runtime. No
+Austral module is compiled, no provider is loaded, no JIT call is made, and the
+grant is constructed in the demo binary rather than read from a project
+document. U22's card still asks for the compiled module through umbrella
+provider loading, a scoped callback, a granted output capability, a project
+document carrying the same grant, and perturbation of the input so a canned
+output cannot pass. `examples/modules/rust_kv` remains the unimplemented status
+demo guarded by `scripts/test-umbrella --case HAR02`; this example does not
+replace or relax that guard.
+
+### Compiled-module path (2026-11-27)
+
+U22's module runtime half now runs. `examples/modules/cap_fs/CapFs.aum` is a
+real Austral module compiled by the stock front end to `module.cps`
+(`gen_cps.sh`, committed so a fresh checkout needs no OCaml); `modhost` loads
+that CPS under `module.toml`, installs the instance capability set and invokes
+`compute` through the JIT. The module itself calls `rs_cap_open_root`,
+`rs_cap_read` and `rs_cap_write` with pointer/length words, so every verb is
+gated by the manifest's `kernel` grants and every root by its `fs` grants.
+
+`bash examples/modules/cap_fs/run.sh` (reduced bridge features
+`cedar,tier1-rs`; `modhost` rebuilt from current sources at
+`safestos/cranelift/target/release/modhost`) → **exit 0**:
+
+```
+granted: read data/records.txt, wrote out/result.txt (23 bytes) matching the reference
+denied traversal: ../outside/sentinel.txt refused while the module ran; sentinel unchanged
+perturbation: changed input produced the changed reference output (31 bytes)
+denied: without the rs_cap_write grant the load is refused (UK-4001) and no file is created
+```
+
+The oracle is `reference.rs`, compiled by `rustc` on each run and given ambient
+filesystem access; the output must equal its bytes, not just a length. The
+perturbed run replaces the record and requires both a changed output and a
+match to the perturbed reference, so a canned result fails. The denied run
+removes only `rs_cap_write` from a copy of the manifest and requires exit 1,
+`UK-4001` naming the verb, and no `result.txt`.
+
+Limitations: the module's transform is a byte-for-byte copy, because the memory
+builtins that would rewrite its buffer (`positiveOffset`/`load`/`store`) lower
+to an unresolved `__embed$2` under the JIT; that is a measured compiler/JIT
+gap, not a grant decision. A scoped callback, a module loopback dial, and the
+umbrella project-document wiring remain, as does replacing
+`examples/modules/rust_kv`'s unimplemented status demo.

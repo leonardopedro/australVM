@@ -298,6 +298,97 @@ fn a_descriptor_document_renders_wrappers_without_a_build() {
     );
 }
 
+/// U21: a descriptor document plus a provider is enough to compile a real
+/// adapter crate. The artifact is then dlopened and called, so the measurement
+/// is the exported wrapper's behaviour, not its source text.
+#[test]
+fn a_descriptor_document_builds_a_loadable_adapter_crate() {
+    use std::ffi::{CStr, CString};
+
+    let dir = scratch("wrappers-build");
+    let provider_src = dir.join("provider.rs");
+    std::fs::write(
+        &provider_src,
+        "#[no_mangle]\npub extern \"C\" fn rs_scale(x: f64) -> f64 { x * 3.0 }\n",
+    )
+    .expect("write provider source");
+    let provider = dir.join("libscale.so");
+    let rustc = Command::new("rustc")
+        .arg("--crate-type=cdylib")
+        .arg("--edition=2021")
+        .arg("-o")
+        .arg(&provider)
+        .arg(&provider_src)
+        .output()
+        .expect("spawn rustc");
+    assert!(
+        rustc.status.success(),
+        "provider rustc: {}",
+        String::from_utf8_lossy(&rustc.stderr)
+    );
+
+    let document = dir.join("adapters.txt");
+    std::fs::write(
+        &document,
+        "schema 1\nabi scalar 1\nsymbol rs_scale__adapter\ntarget rs_scale\n\
+         params Float64\nreturns Float64\n",
+    )
+    .expect("write descriptor document");
+    let out = dir.join("built");
+
+    let output = bin()
+        .arg("--json")
+        .arg("--descriptor-document")
+        .arg(&document)
+        .arg("--build-wrappers")
+        .arg(&out)
+        .arg("--provider")
+        .arg(&provider)
+        .output()
+        .expect("run umbrella");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"event\":\"wrappers_built\"")
+            && stdout.contains("rs_scale__adapter")
+            && stdout.contains("\"generation\":1"),
+        "the build reports the artifact it produced: {stdout}"
+    );
+
+    let artifact = out.join("libumbrella_adapters_1.so");
+    assert!(
+        artifact.is_file(),
+        "the adapter crate is written where the event names it"
+    );
+
+    let path = CString::new(artifact.to_str().expect("utf-8 path")).unwrap();
+    let handle = unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+    if handle.is_null() {
+        let reason = unsafe { CStr::from_ptr(libc::dlerror()) }
+            .to_string_lossy()
+            .into_owned();
+        panic!("dlopen {}: {reason}", artifact.display());
+    }
+    let symbol = CString::new("rs_scale__adapter").unwrap();
+    let entry = unsafe { libc::dlsym(handle, symbol.as_ptr()) };
+    assert!(!entry.is_null(), "the built crate exports the wrapper");
+    let wrapper: unsafe extern "C" fn(u64) -> u64 = unsafe { std::mem::transmute(entry) };
+    let answer = unsafe { wrapper(1.5f64.to_bits()) };
+    assert_eq!(
+        f64::from_bits(answer),
+        4.5,
+        "the wrapper decodes, calls the provider's rs_scale and encodes"
+    );
+    unsafe {
+        libc::dlclose(handle);
+    }
+}
+
 #[test]
 fn a_descriptor_document_without_adapter_blocks_is_refused() {
     let dir = scratch("wrappers-empty");

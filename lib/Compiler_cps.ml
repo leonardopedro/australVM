@@ -1124,6 +1124,17 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
           them in the lowering. *)
        | "au_calloc($1, $2)", [elem; count] -> App ("au_calloc", [elem; count])
        | "au_free($1)", [a] -> App ("au_free", [a])
+       (* `Austral.Memory`'s accessors. They used to fall through to an
+          `__embed` call the JIT cannot resolve (`can't resolve symbol
+          __embed$2`), so no compiled module could touch its own buffer. Each
+          one is an instruction the machine already has: `*($1)` is `Deref`
+          (0x20), `AU_STORE($1, $2)` is `Store` (0x30), and the two pointer
+          offsets are the arithmetic opcodes. The JIT's values are 64-bit
+          words, so `load`/`store` move one word per call. *)
+       | "*($1)", [a] -> Deref a
+       | "AU_STORE($1, $2)", [ptr; v] -> Store (ptr, v)
+       | "$1 + $2", [a; b] -> Add (a, b)
+       | "$1 - $2", [a; b] -> Sub (a, b)
        | _ -> App ("__embed", cargs))
   | Mt.MDeref (Mt.MSlotAccessor (e, name, ty)) ->
       (* A record value's field read arrives here as a dereference of the slot

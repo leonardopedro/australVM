@@ -863,6 +863,167 @@ impl BufferAdapter {
     }
 }
 
+/// Text transport version 1 (U21): a `&str` parameter arrives as two wire
+/// words — pointer then length — and a returned `String` leaves as a heap
+/// `(pointer, length)` pair the caller reads and frees with
+/// `<symbol>__text_free`. The pair is two `u64`s at offsets 0 and 8, so the
+/// caller never depends on Rust's `String` layout.
+pub const TEXT_ABI_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextAdapter {
+    pub schema: u32,
+    pub abi_version: u32,
+    pub symbol: String,
+    pub target: String,
+}
+
+impl TextAdapter {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema != DESCRIPTOR_SCHEMA {
+            return Err(format!(
+                "descriptor schema {} is not {DESCRIPTOR_SCHEMA}; regenerate it",
+                self.schema
+            ));
+        }
+        if self.abi_version == 0 || self.abi_version > TEXT_ABI_VERSION {
+            return Err(format!(
+                "descriptor claims text transport version {}, this build knows 1 \
+                 through {TEXT_ABI_VERSION}; a wrapper generated for another \
+                 transport must not be used",
+                self.abi_version
+            ));
+        }
+        if self.symbol.is_empty() || self.target.is_empty() {
+            return Err("descriptor needs a non-empty symbol and target".to_string());
+        }
+        Ok(())
+    }
+
+    /// The canonical block this schema writes. Version 1 fixes the shape: one
+    /// borrowed `&str` in, one owned `String` out. A call with more text
+    /// parameters would need a wire convention for the extra pairs, and a
+    /// scalar beside the text would need a mixed transport; both are refused
+    /// rather than guessed.
+    pub fn canonical_text(&self) -> String {
+        format!(
+            "schema {}\nabi text {}\nsymbol {}\ntarget {}\nparams Text\nreturns Text\n",
+            self.schema, self.abi_version, self.symbol, self.target
+        )
+    }
+
+    /// Read every `abi text` block, skipping the other kinds' blocks so one
+    /// document can describe all of them.
+    pub fn parse_descriptors(text: &str) -> Result<Vec<TextAdapter>, String> {
+        let mut adapters = Vec::new();
+        let mut block = String::new();
+        for line in text.lines() {
+            if line.trim().is_empty() {
+                Self::finish(&block, &mut adapters)?;
+                block.clear();
+            } else {
+                block.push_str(line);
+                block.push('\n');
+            }
+        }
+        Self::finish(&block, &mut adapters)?;
+        Ok(adapters)
+    }
+
+    fn finish(block: &str, adapters: &mut Vec<TextAdapter>) -> Result<(), String> {
+        let has_fact = block.lines().any(|line| {
+            let line = line.trim();
+            !line.is_empty() && !line.starts_with('#')
+        });
+        if !has_fact || !is_text_block(block) {
+            return Ok(());
+        }
+        let adapter = TextAdapter::parse_descriptor(block)?;
+        if adapters.iter().any(|a| a.symbol == adapter.symbol) {
+            return Err(format!(
+                "duplicate text descriptor for `{}`; one call site gets one block",
+                adapter.symbol
+            ));
+        }
+        adapter.validate()?;
+        adapters.push(adapter);
+        Ok(())
+    }
+
+    pub fn parse_descriptor(text: &str) -> Result<TextAdapter, String> {
+        let mut schema = None;
+        let mut abi_version = None;
+        let mut symbol = None;
+        let mut target = None;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let (key, value) = line
+                .split_once(' ')
+                .ok_or_else(|| format!("descriptor line `{line}` has no value"))?;
+            match key {
+                "schema" => {
+                    schema = Some(
+                        value
+                            .parse::<u32>()
+                            .map_err(|_| format!("schema `{value}` is not a number"))?,
+                    )
+                }
+                "abi" => {
+                    let rest = value.strip_prefix("text ").ok_or_else(|| {
+                        format!("`{line}` is not a text block (`abi text {TEXT_ABI_VERSION}`)")
+                    })?;
+                    abi_version = Some(
+                        rest.parse::<u32>()
+                            .map_err(|_| format!("abi version `{rest}` is not a number"))?,
+                    );
+                }
+                "symbol" => symbol = Some(value.to_string()),
+                "target" => target = Some(value.to_string()),
+                "params" => {
+                    if value != "Text" {
+                        return Err(format!(
+                            "`{}` declares `params {value}`; text transport version 1 \
+                             carries exactly one `Text` parameter",
+                            symbol.as_deref().unwrap_or("<unnamed>")
+                        ));
+                    }
+                }
+                "returns" => {
+                    if value != "Text" {
+                        return Err(format!(
+                            "`{}` declares `returns {value}`; text transport version 1 \
+                             returns an owned `Text` (a `String`), not `{value}`",
+                            symbol.as_deref().unwrap_or("<unnamed>")
+                        ));
+                    }
+                }
+                other => return Err(format!("unknown text descriptor field `{other}`")),
+            }
+        }
+        let adapter = TextAdapter {
+            schema: schema.ok_or("descriptor has no `schema` line")?,
+            abi_version: abi_version
+                .ok_or_else(|| format!("descriptor has no `abi text {TEXT_ABI_VERSION}` line"))?,
+            symbol: symbol.ok_or("descriptor has no `symbol` line")?,
+            target: target.ok_or("descriptor has no `target` line")?,
+        };
+        adapter.validate()?;
+        Ok(adapter)
+    }
+}
+
+fn is_text_block(block: &str) -> bool {
+    block.lines().any(|line| {
+        line.trim()
+            .strip_prefix("abi ")
+            .map(|rest| rest.starts_with("text "))
+            .unwrap_or(false)
+    })
+}
+
 fn is_buffer_block(block: &str) -> bool {
     block.lines().any(|line| {
         line.trim()
@@ -1329,6 +1490,79 @@ pub fn render_wrapper_checked_union(adapter: &Adapter) -> Result<String, String>
 /// with a null pointer, or a length that does not fit a signed 64-bit extent,
 /// panics. Capacity is the declared length — the wrapper can check that a
 /// length exists, not that the caller's allocation is that large.
+/// Render the wrapper for one `abi text` block: the provider sees a real
+/// `&str` and returns a real `String`, exactly as a direct Rust caller would,
+/// while the wire side is two words in and one boxed pair out.
+///
+/// Null is a refusal (a null pointer with a non-zero length, invalid UTF-8, or
+/// a length that cannot index this host), never an empty string: an empty
+/// answer is a non-null pair with length 0. A provider panic crosses the
+/// C-ABI boundary, so it aborts rather than becoming a refusal — the same
+/// contract the scalar wrappers have.
+pub fn render_text_wrapper(adapter: &TextAdapter) -> Result<String, String> {
+    adapter.validate()?;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "// @generated by umbrella from `{}` — do not edit.",
+        adapter.symbol
+    );
+    let _ = writeln!(
+        out,
+        "// text transport version {} (descriptor schema {})",
+        adapter.abi_version, adapter.schema
+    );
+    let _ = writeln!(
+        out,
+        "/// A returned `String` as two words: bytes at `ptr`, `len` bytes long.\n\
+         /// The caller reads this pair and frees it with `{}__text_free`.\n\
+         #[repr(C)]\n\
+         pub struct TextOut {{\n    pub ptr: *mut u8,\n    pub len: u64,\n}}\n",
+        adapter.symbol
+    );
+    let _ = writeln!(
+        out,
+        "#[allow(improper_ctypes)]\n\
+         extern \"C\" {{\n    fn {}(text: &str) -> String;\n}}\n",
+        adapter.target
+    );
+    let _ = writeln!(
+        out,
+        "/// Decode a UTF-8 byte range, call the provider's `&str -> String` \
+         function,\n/// and return its answer as a boxed pair (null on refusal).\n\
+         #[no_mangle]\n\
+         pub unsafe extern \"C\" fn {}(ptr: *const u8, len: u64) -> *mut TextOut {{",
+        adapter.symbol
+    );
+    let _ = writeln!(
+        out,
+        "    if len > usize::MAX as u64 {{\n        return std::ptr::null_mut();\n    }}\n\
+         \x20   let bytes: &[u8] = if len == 0 {{\n        &[]\n    }} else {{\n\
+         \x20       if ptr.is_null() {{\n            return std::ptr::null_mut();\n        }}\n\
+         \x20       std::slice::from_raw_parts(ptr, len as usize)\n    }};\n\
+         \x20   let Ok(text) = std::str::from_utf8(bytes) else {{\n        return std::ptr::null_mut();\n    }};\n\
+         \x20   let answer = {}(text);\n\
+         \x20   let mut bytes = answer.into_bytes().into_boxed_slice();\n\
+         \x20   let out = Box::new(TextOut {{\n        ptr: bytes.as_mut_ptr(),\n        len: bytes.len() as u64,\n    }});\n\
+         \x20   std::mem::forget(bytes);\n\
+         \x20   Box::into_raw(out)\n}}\n",
+        adapter.target
+    );
+    let _ = writeln!(
+        out,
+        "/// Free a pair `{}` returned. Null is accepted and does nothing.\n\
+         #[no_mangle]\n\
+         pub unsafe extern \"C\" fn {}__text_free(out: *mut TextOut) {{\n\
+         \x20   if out.is_null() {{\n        return;\n    }}\n\
+         \x20   let out = Box::from_raw(out);\n\
+         \x20   if !out.ptr.is_null() {{\n\
+         \x20       drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(\n\
+         \x20           out.ptr, out.len as usize,\n        )));\n    }}\n}}\n",
+        adapter.symbol, adapter.symbol
+    );
+    Ok(out)
+}
+
 pub fn render_buffer_wrapper(adapter: &BufferAdapter) -> Result<String, String> {
     adapter.validate()?;
     let mut out = String::new();
@@ -2806,6 +3040,7 @@ pub enum GeneratedAdapter<'a> {
     Scalar(&'a Adapter),
     Buffer(&'a BufferAdapter),
     Handle(&'a HandleAdapter),
+    Text(&'a TextAdapter),
 }
 
 impl<'a> GeneratedAdapter<'a> {
@@ -2814,6 +3049,7 @@ impl<'a> GeneratedAdapter<'a> {
             GeneratedAdapter::Scalar(a) => &a.symbol,
             GeneratedAdapter::Buffer(a) => &a.symbol,
             GeneratedAdapter::Handle(a) => &a.symbol,
+            GeneratedAdapter::Text(a) => &a.symbol,
         }
     }
 
@@ -2838,6 +3074,9 @@ impl<'a> GeneratedAdapter<'a> {
                     format!("{}__checked", a.symbol),
                     format!("{}__free", a.symbol),
                 ]
+            }
+            GeneratedAdapter::Text(a) => {
+                vec![a.symbol.clone(), format!("{}__text_free", a.symbol)]
             }
             _ => vec![self.symbol().to_string()],
         }
@@ -2892,6 +3131,7 @@ impl<'a> GeneratedAdapter<'a> {
             GeneratedAdapter::Scalar(a) => render_wrapper(a),
             GeneratedAdapter::Buffer(a) => render_buffer_wrapper(a),
             GeneratedAdapter::Handle(a) => render_handle_wrapper_at(a, generation),
+            GeneratedAdapter::Text(a) => render_text_wrapper(a),
         }
     }
 }

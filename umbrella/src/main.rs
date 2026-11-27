@@ -116,27 +116,58 @@ fn with_defaults(cli: umbrella::cli::Cli) -> umbrella::cli::Cli {
 /// this path never needs the front-end, cargo or the JIT: it parses the same
 /// blocks the build path parses and writes the same combined `mod wN { … }`
 /// crate source `adapters::build_at` renders.
+/// The three adapter kinds one descriptor document can name, kept alive so
+/// `GeneratedAdapter` can borrow them.
+struct DescriptorDocument {
+    scalars: Vec<interface::Adapter>,
+    buffers: Vec<interface::BufferAdapter>,
+    handles: Vec<interface::HandleAdapter>,
+    texts: Vec<interface::TextAdapter>,
+}
+
+impl DescriptorDocument {
+    fn adapters(&self) -> Vec<interface::GeneratedAdapter<'_>> {
+        self.scalars
+            .iter()
+            .map(interface::GeneratedAdapter::Scalar)
+            .chain(self.buffers.iter().map(interface::GeneratedAdapter::Buffer))
+            .chain(self.handles.iter().map(interface::GeneratedAdapter::Handle))
+            .chain(self.texts.iter().map(interface::GeneratedAdapter::Text))
+            .collect()
+    }
+}
+
+/// Parse the text `austral compile --emit-adapters` writes with the same
+/// parsers the build path uses. A document that names no adapter is refused
+/// here, because both outputs would otherwise be silently empty.
+fn read_descriptor_document(document: &std::path::Path) -> Result<DescriptorDocument, String> {
+    let text = std::fs::read_to_string(document).map_err(|e| {
+        format!(
+            "cannot read descriptor document {}: {e}",
+            document.display()
+        )
+    })?;
+    let parsed = DescriptorDocument {
+        scalars: interface::Adapter::parse_descriptors(&text)?,
+        buffers: interface::BufferAdapter::parse_descriptors(&text)?,
+        handles: interface::HandleAdapter::parse_descriptors(&text)?,
+        texts: interface::TextAdapter::parse_descriptors(&text)?,
+    };
+    if parsed.adapters().is_empty() {
+        return Err(format!(
+            "{} contains no adapter blocks (`abi scalar`, `abi buffer`, `abi handle` or `abi text`)",
+            document.display()
+        ));
+    }
+    Ok(parsed)
+}
+
 fn render_wrapper_document(
     document: &std::path::Path,
     dir: &std::path::Path,
 ) -> Result<(usize, PathBuf), String> {
-    let text = std::fs::read_to_string(document)
-        .map_err(|e| format!("cannot read descriptor document {}: {e}", document.display()))?;
-    let scalars = interface::Adapter::parse_descriptors(&text)?;
-    let buffers = interface::BufferAdapter::parse_descriptors(&text)?;
-    let handles = interface::HandleAdapter::parse_descriptors(&text)?;
-    let adapters: Vec<interface::GeneratedAdapter<'_>> = scalars
-        .iter()
-        .map(interface::GeneratedAdapter::Scalar)
-        .chain(buffers.iter().map(interface::GeneratedAdapter::Buffer))
-        .chain(handles.iter().map(interface::GeneratedAdapter::Handle))
-        .collect();
-    if adapters.is_empty() {
-        return Err(format!(
-            "{} contains no adapter blocks (`abi scalar`, `abi buffer` or `abi handle`)",
-            document.display()
-        ));
-    }
+    let parsed = read_descriptor_document(document)?;
+    let adapters = parsed.adapters();
     let mut source = String::new();
     for (index, adapter) in adapters.iter().enumerate() {
         let wrapper = adapter
@@ -148,6 +179,21 @@ fn render_wrapper_document(
     let file = dir.join("wrappers.rs");
     std::fs::write(&file, source).map_err(|e| format!("write {}: {e}", file.display()))?;
     Ok((adapters.len(), file))
+}
+
+/// Compile the document's wrappers into a loadable cdylib linked against
+/// `provider`. This is the same `adapters::build_at` a module run uses, with the
+/// first generation, so the artifact the JIT would resolve is the artifact a
+/// user gets from the document alone.
+fn build_wrapper_document(
+    document: &std::path::Path,
+    dir: &std::path::Path,
+    provider: &std::path::Path,
+) -> Result<(usize, PathBuf, Vec<String>), String> {
+    let parsed = read_descriptor_document(document)?;
+    let adapters = parsed.adapters();
+    let built = umbrella::adapters::build_at(&adapters, dir, 1, Some(provider))?;
+    Ok((adapters.len(), built.path, built.exports))
 }
 
 /// 1. cargo build the crate and hand back its cdylib path.
@@ -423,21 +469,46 @@ fn main() {
     // U21 bounded start: a descriptor document on its own is enough to render
     // the provider wrappers. No cargo, no front-end, no dlopen.
     if let Some(document) = &cli.descriptor_document {
+        if let Some(dir) = &cli.emit_wrappers {
+            match render_wrapper_document(document, dir) {
+                Ok((count, file)) => {
+                    event(serde_json::json!({
+                        "event": "wrappers",
+                        "count": count,
+                        "path": file.display().to_string(),
+                    }));
+                    eprintln!(
+                        "umbrella: rendered {count} provider wrapper(s) from {} to {}",
+                        document.display(),
+                        file.display()
+                    );
+                    return;
+                }
+                Err(e) => die(e),
+            }
+        }
         let dir = cli
-            .emit_wrappers
+            .build_wrappers
             .as_ref()
-            .expect("`--descriptor-document` is paired with `--emit-wrappers`");
-        match render_wrapper_document(document, dir) {
-            Ok((count, file)) => {
+            .expect("`--build-wrappers` is present when `--emit-wrappers` is not");
+        let provider = cli
+            .provider
+            .as_ref()
+            .expect("`--build-wrappers` requires `--provider`");
+        match build_wrapper_document(document, dir, provider) {
+            Ok((count, file, exports)) => {
                 event(serde_json::json!({
-                    "event": "wrappers",
+                    "event": "wrappers_built",
                     "count": count,
+                    "generation": 1,
                     "path": file.display().to_string(),
+                    "exports": exports,
                 }));
                 eprintln!(
-                    "umbrella: rendered {count} provider wrapper(s) from {} to {}",
+                    "umbrella: built {count} provider wrapper(s) from {} to {}, linked against {}",
                     document.display(),
-                    file.display()
+                    file.display(),
+                    provider.display()
                 );
                 return;
             }

@@ -29,7 +29,8 @@ pub const USAGE: &str = "usage: umbrella [--project <json>] [--manifest <toml>] 
        \x20            [--profile dev|release] [--features <list>]... [--locked] [--offline]\n\
        \x20            [--liquid-required] [--emit-trust-record <json>]\n\
        \x20            [--cache-dir <dir>]\n\
-       \x20            [--descriptor-document <file> --emit-wrappers <dir>]\n\
+       \x20            [--descriptor-document <file>] [--emit-wrappers <dir>]\n\
+       \x20            [--build-wrappers <dir> --provider <lib>]\n\
        \x20            [--] <module.aum>...\n\
        \x20      umbrella --help | --version";
 
@@ -67,9 +68,15 @@ pub struct Cli {
     /// U21 bounded start: the compiler-emitted adapter document to render
     /// wrappers from, without compiling or loading a module.
     pub descriptor_document: Option<PathBuf>,
-    /// Where the rendered `wrappers.rs` is written. Required with
-    /// `descriptor_document`, and meaningless without it.
+    /// Where the rendered `wrappers.rs` is written. One of this and
+    /// `build_wrappers` is required with `descriptor_document`.
     pub emit_wrappers: Option<PathBuf>,
+    /// U21: compile the rendered wrappers into a loadable cdylib instead of
+    /// only writing their source. Needs `--provider` to link the native image.
+    pub build_wrappers: Option<PathBuf>,
+    /// The provider image the built adapter crate links by absolute path.
+    /// Only meaningful with `build_wrappers`.
+    pub provider: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -335,6 +342,17 @@ where
                     "emit-wrappers",
                 )?);
             }
+            "build-wrappers" => {
+                once(&mut seen, "build-wrappers")?;
+                cli.build_wrappers = Some(path_value(
+                    take_value("build-wrappers", false)?,
+                    "build-wrappers",
+                )?);
+            }
+            "provider" => {
+                once(&mut seen, "provider")?;
+                cli.provider = Some(path_value(take_value("provider", false)?, "provider")?);
+            }
             "expect" => {
                 once(&mut seen, "expect")?;
                 let raw = take_value("expect", true)?;
@@ -354,16 +372,60 @@ where
         i += 1;
     }
 
-    if cli.descriptor_document.is_some() != cli.emit_wrappers.is_some() {
-        return Err(UsageError::new(
-            "`--descriptor-document` and `--emit-wrappers` are used together: one \
-             names the compiler's document, the other where to write its wrappers",
-        ));
+    let wrapper_outputs = cli
+        .emit_wrappers
+        .iter()
+        .chain(cli.build_wrappers.iter())
+        .count();
+    if cli.descriptor_document.is_none() {
+        if cli.emit_wrappers.is_some() {
+            return Err(UsageError::new(
+                "`--emit-wrappers` is used together with `--descriptor-document`, which \
+                 names the compiler's document",
+            ));
+        }
+        if cli.build_wrappers.is_some() {
+            return Err(UsageError::new(
+                "`--build-wrappers` is used together with `--descriptor-document`, which \
+                 names the compiler's document",
+            ));
+        }
+        if cli.provider.is_some() {
+            return Err(UsageError::new(
+                "`--provider` is only meaningful with `--build-wrappers`: it is the image \
+                 the generated adapter crate links",
+            ));
+        }
     }
     if cli.descriptor_document.is_some() {
+        if wrapper_outputs == 0 {
+            return Err(UsageError::new(
+                "`--descriptor-document` is used together with exactly one of \
+                 `--emit-wrappers <dir>` (render the source) or `--build-wrappers <dir>` \
+                 (compile it); none was given",
+            ));
+        }
+        if wrapper_outputs > 1 {
+            return Err(UsageError::new(
+                "`--emit-wrappers` and `--build-wrappers` write different artifacts; \
+                 pass exactly one",
+            ));
+        }
+        if cli.build_wrappers.is_some() && cli.provider.is_none() {
+            return Err(UsageError::new(
+                "`--build-wrappers` needs `--provider <lib>`: the adapter crate links \
+                 that image and leaves its symbols to it",
+            ));
+        }
+        if cli.build_wrappers.is_none() && cli.provider.is_some() {
+            return Err(UsageError::new(
+                "`--provider` is only meaningful with `--build-wrappers`; \
+                 `--emit-wrappers` writes source and links nothing",
+            ));
+        }
         if !cli.modules.is_empty() || cli.project.is_some() {
             return Err(UsageError::new(
-                "`--descriptor-document` renders wrappers only; do not pass modules \
+                "`--descriptor-document` produces wrappers only; do not pass modules \
                  or `--project` in the same run",
             ));
         }
@@ -677,6 +739,71 @@ mod tests {
         ])
         .unwrap_err()
         .0
-        .contains("renders wrappers only"));
+        .contains("produces wrappers only"));
+    }
+
+    #[test]
+    fn descriptor_document_can_build_wrappers_against_a_provider() {
+        let cli = run(&[
+            "--descriptor-document",
+            "adapters.txt",
+            "--build-wrappers",
+            "out",
+            "--provider",
+            "libp.so",
+        ]);
+        assert_eq!(
+            cli.build_wrappers.as_deref(),
+            Some(std::path::Path::new("out"))
+        );
+        assert_eq!(
+            cli.provider.as_deref(),
+            Some(std::path::Path::new("libp.so"))
+        );
+        assert!(cli.emit_wrappers.is_none());
+
+        // The build needs a provider to link; the render path links nothing and
+        // refuses one, so neither flag silently ignores the other.
+        assert!(p(&[
+            "--descriptor-document",
+            "adapters.txt",
+            "--build-wrappers",
+            "out",
+        ])
+        .unwrap_err()
+        .0
+        .contains("needs `--provider"));
+        assert!(p(&[
+            "--descriptor-document",
+            "adapters.txt",
+            "--emit-wrappers",
+            "out",
+            "--provider",
+            "libp.so",
+        ])
+        .unwrap_err()
+        .0
+        .contains("only meaningful with `--build-wrappers`"));
+        assert!(p(&[
+            "--descriptor-document",
+            "adapters.txt",
+            "--emit-wrappers",
+            "a",
+            "--build-wrappers",
+            "b",
+            "--provider",
+            "libp.so",
+        ])
+        .unwrap_err()
+        .0
+        .contains("pass exactly one"));
+        assert!(p(&["--build-wrappers", "out", "--provider", "libp.so"])
+            .unwrap_err()
+            .0
+            .contains("used together"));
+        assert!(p(&["--provider", "libp.so", "D.aum"])
+            .unwrap_err()
+            .0
+            .contains("only meaningful with `--build-wrappers`"));
     }
 }
