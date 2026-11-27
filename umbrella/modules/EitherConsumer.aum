@@ -1,0 +1,29 @@
+-- umbrella/modules/EitherConsumer.aum — U15c's cross-module boundary.
+--
+-- The checked union is produced here (the adapter is this module's import) and
+-- passed to `EitherProducer.consume`, whose body is compiled in a different
+-- front-end invocation and therefore cannot know the caller's
+-- `rs_choose_consumer__adapter__free`. The caller is the side that holds that
+-- symbol, so the call's lowering binds the union, calls the producer, and
+-- releases the union after the call returns; the producer's `match` frees
+-- nothing. The import below lets the umbrella derive the build order from the
+-- sources, so this consumer may be listed before its producer; both modules
+-- are lowered into the one bundled CPS artifact and linked by name.
+pragma Unsafe_Module;
+
+import EitherProducer (consume);
+
+module body EitherConsumer is
+    pragma Foreign_Import(External_Name => "rs_choose_consumer");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_choose_consumer(flag: Nat64): Either[Int64, Int64] is
+    end;
+
+    function computeThrough(): Int64 is
+        return consume(rs_choose_consumer(1));
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.

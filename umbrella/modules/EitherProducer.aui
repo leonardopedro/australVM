@@ -1,0 +1,6 @@
+module EitherProducer is
+    -- Consumes an `Either[Int64, Int64]` and returns a value derived from the
+    -- case it read. The body is the one that would release a checked union if
+    -- it could know the caller's provider; see EitherConsumer.aum.
+    function consume(value: Either[Int64, Int64]): Int64;
+end module.

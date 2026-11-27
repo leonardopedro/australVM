@@ -1,0 +1,18 @@
+# U11/U12 adapter descriptors, emitted by the compiler's CPS lowering.
+# Canonical form: fixed field order, one fact per line, descriptors
+# sorted by symbol, blocks separated by a blank line.
+# `umbrella/src/interface.rs` parses this text.
+
+schema 1
+abi scalar 1
+symbol rs_parse__adapter
+target rs_parse
+params Nat64
+returns Int64
+status checked
+failure 0
+success 1
+union Result
+failure-case Err
+success-case Ok
+failure-payload Int64

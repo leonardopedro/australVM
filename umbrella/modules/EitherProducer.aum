@@ -1,0 +1,10 @@
+module body EitherProducer is
+    function consume(value: Either[Int64, Int64]): Int64 is
+        case value of
+            when Right(right: Int64) do
+                return right + 4;
+            when Left(left: Int64) do
+                return left + 13;
+        end case;
+    end;
+end module body.

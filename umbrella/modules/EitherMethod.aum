@@ -1,0 +1,44 @@
+-- umbrella/modules/EitherMethod.aum — U15c's concrete-method transfer.
+--
+-- `send` is a concrete instance method (the instance has no type parameters),
+-- so the call in `computeThrough` lowers to an `MConcreteMethodCall`. Its
+-- second parameter is the checked union itself, declared in the method's
+-- signature rather than as the dispatch type (an instance on a generic type
+-- would be generic, and its call a `MGenericMethodCall`). The method is
+-- declared in this module, so its body is emitted under the instance-method id
+-- and the call names it; the transfer table records that `send`'s parameter
+-- owns the checked union, and the method's own `match` releases it.
+-- `computeThrough` returns 11 only when the callee read Right(7); the
+-- allocation counter test requires the wrapper's live count to stay at
+-- baseline.
+pragma Unsafe_Module;
+
+module body EitherMethod is
+    pragma Foreign_Import(External_Name => "rs_choose_method");
+    pragma Rust_Ownership(Params => "owned", Return => "owned");
+    function rs_choose_method(flag: Nat64): Either[Int64, Int64] is
+    end;
+
+    typeclass Sink(T: Free) is
+        method send(tag: T, value: Either[Int64, Int64]): Int64;
+    end;
+
+    instance Sink(Int64) is
+        method send(tag: Int64, value: Either[Int64, Int64]): Int64 is
+            case value of
+                when Right(right: Int64) do
+                    return right + 4;
+                when Left(left: Int64) do
+                    return left + 13;
+            end case;
+        end;
+    end;
+
+    function computeThrough(): Int64 is
+        return send(0 : Int64, rs_choose_method(1));
+    end;
+
+    function main(): ExitCode is
+        return ExitSuccess();
+    end;
+end module body.
