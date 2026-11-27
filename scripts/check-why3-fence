@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# D21: discharge the D14 fencing claim with Why3.
+#
+# The theory is `docs/distributed/why3/fence_invariant.mlw`. This gate runs
+# Why3 over it with Z3 only, requires every goal to come back `Valid`, and
+# requires the goal count to be the one the record claims, so a theory emptied
+# of its lemmas cannot pass by proving nothing.
+#
+# Why3 is an optional toolchain: when it is absent the run is reported as an
+# explained gap (the same idiom as the repo's other missing-toolchain checks),
+# never as a false pass or a false failure.
+#
+# Usage: scripts/check-why3-fence
+# Exit codes: 0 every goal valid (or toolchain absent), 1 a goal was not proved
+#             or the goal count changed, 2 usage.
+
+set -uo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+theory="$root/docs/distributed/why3/fence_invariant.mlw"
+expected_goals=15
+
+if [ ! -f "$theory" ]; then
+    echo "FAIL: theory missing: $theory"
+    exit 1
+fi
+
+if ! command -v why3 >/dev/null 2>&1; then
+    echo "[gap] D21 why3 fence proof (tooling absent: why3 not on PATH)"
+    exit 0
+fi
+
+# `-P z3` pins the prover: a goal reported valid by some other backend would
+# not be the transcript this record names.
+output=$(why3 prove -P z3 --timelimit 60 "$theory" 2>&1)
+status=$?
+printf '%s\n' "$output"
+
+goals=$(printf '%s\n' "$output" | grep -c '^Goal ')
+valid=$(printf '%s\n' "$output" | grep -c 'Prover result is: Valid')
+
+if [ "$goals" -ne "$expected_goals" ]; then
+    echo "FAIL: proved $goals goal(s), expected $expected_goals (theory edited without updating the record?)"
+    exit 1
+fi
+
+if [ "$status" -ne 0 ] || [ "$valid" -ne "$goals" ]; then
+    echo "FAIL: $valid/$goals goals valid (why3 exit $status)"
+    exit 1
+fi
+
+echo "PASS: $valid/$goals goals valid (why3 $(why3 --version 2>/dev/null | sed 's/^Why3 platform, version //'))"

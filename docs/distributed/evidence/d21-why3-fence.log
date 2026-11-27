@@ -1,0 +1,66 @@
+$ why3 --version
+Why3 platform, version 1.8.2
+
+$ scripts/check-why3-fence
+Warning, file "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 94, characters 6-7: unused expression (every field is overwritten)
+Warning, file "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 100, characters 11-12: unused expression (every field is overwritten)
+File "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 127, characters 4-50:
+Goal next_strictly_newer.
+Prover result is: Valid (0.01s, 2291 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 130, characters 4-50:
+Goal claim_advances.
+Prover result is: Valid (0.00s, 6048 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 133, characters 4-43:
+Goal claim_preserves_inv.
+Prover result is: Valid (0.01s, 10742 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 136, characters 4-51:
+Goal step_preserves_inv.
+Prover result is: Valid (0.02s, 24446 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 139, character 4 to line 143, character 45:
+Goal non_issuing_fence_unchanged.
+Prover result is: Valid (0.01s, 25127 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 146, characters 4-56:
+Goal renew_fence_unchanged_unless_current.
+Prover result is: Valid (0.01s, 16462 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 149, characters 4-58:
+Goal step_advances.
+Prover result is: Valid (0.01s, 31044 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 154, characters 4-61:
+Goal settle_applies_only_when_current.
+Prover result is: Valid (0.01s, 22641 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 157, characters 4-71:
+Goal settle_changes_nothing_or_fires.
+Prover result is: Valid (0.01s, 24594 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 160, characters 4-66:
+Goal stale_settle_changes_nothing.
+Prover result is: Valid (0.01s, 4671 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 163, character 4 to line 165, character 32:
+Goal fence_transitions_require_current.
+Prover result is: Valid (0.01s, 38145 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 175, characters 4-69:
+Goal fence_le_transitive.
+Prover result is: Valid (0.01s, 30367 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 178, characters 4-58:
+Goal step_fence_le.
+Prover result is: Valid (0.02s, 90244 steps).
+
+File /home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw:
+Goal run_fence_le'vc.
+Prover result is: Valid (0.04s, 61096 steps).
+
+File "/home/leo/Projects/australVM/docs/distributed/why3/fence_invariant.mlw", line 205, character 4 to line 208, character 28:
+Goal run_fence_strictly_newer.
+Prover result is: Valid (0.01s, 20443 steps).
+PASS: 15/15 goals valid (why3 1.8.2)
