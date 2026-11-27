@@ -434,6 +434,11 @@ pub extern "C-unwind" fn choose(flag: u64, out: *mut u64) -> i64 {
         22,
         "Left(9) read out of the wrapper's union"
     );
+    assert_eq!(
+        entry("computeThrough"),
+        11,
+        "the callee read Right(7) from the union it was passed"
+    );
 }
 
 /// The Result shape through the same transport: `Result[Int64, Int64]` has a

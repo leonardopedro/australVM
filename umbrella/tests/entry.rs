@@ -219,6 +219,120 @@ fn two_provider_libraries_are_refused_before_mapping() {
     assert!(!stdout(&out).contains("RESULT"), "{}", stdout(&out));
 }
 
+/// A front-end that records each invocation's arguments before writing the
+/// same artifact `fake_front_end` writes.
+fn recording_front_end(dir: &Path, buffer: &[u8]) -> PathBuf {
+    let path = dir.join("recording-austral");
+    let log = dir.join("invocations.log");
+    executable(
+        &path,
+        &format!(
+            "#!/bin/sh\n\
+             printf '%s\\n' \"$@\" >> '{}'\n\
+             for a in \"$@\"; do\n\
+               case \"$a\" in\n\
+                 --emit-cps=*) out=\"${{a#--emit-cps=}}\" ;;\n\
+                 --emit-adapters=*) adapters=\"${{a#--emit-adapters=}}\" ;;\n\
+               esac\n\
+             done\n\
+             [ -n \"$out\" ] && [ -n \"$adapters\" ] || exit 9\n\
+             printf '%b' '{}' > \"$out\"\n\
+             : > \"$adapters\"\n\
+             printf 'CPS JIT: module Entry\\nCPS JIT: Generated 1 functions ({} bytes)\\nCPS JIT: export\\tcompute\\t\\tInt64\\nCPS JIT: Emitted CPS binary to %s\\n' \"$out\" >&2\n\
+             exit 0\n",
+            log.display(),
+            octal(buffer),
+            buffer.len()
+        ),
+    );
+    path
+}
+
+/// U17: a two-module list is one front-end invocation and one artifact. The
+/// recording front-end writes one log line per argument per invocation, so the
+/// number of `compile` commands and the presence of `--emit-cps-bundle` are
+/// measured instead of inferred from the umbrella's own reporting.
+#[test]
+fn a_two_module_list_is_one_bundled_front_end_invocation() {
+    let dir = scratch("bundle");
+    let so = build_stageprobe(&dir);
+    let project = project_with_provider(&dir, &so);
+    let austral = recording_front_end(&dir, &cps("compute", 0, 0x01));
+    let out = Command::new(env!("CARGO_BIN_EXE_umbrella"))
+        .arg("--project")
+        .arg(&project)
+        .arg("--austral")
+        .arg(&austral)
+        .arg("--entry")
+        .arg("compute")
+        .arg("--expect")
+        .arg("7")
+        .arg("--")
+        .arg(dir.join("M.aum"))
+        .arg(dir.join("N.aum"))
+        .output()
+        .expect("run umbrella");
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "RESULT 7", "{}", stderr(&out));
+    let log = std::fs::read_to_string(dir.join("invocations.log")).expect("invocation log");
+    assert_eq!(
+        log.lines().filter(|line| *line == "compile").count(),
+        1,
+        "one compile, not one per dependency prefix:\n{log}"
+    );
+    assert!(log.lines().any(|line| line == "--emit-cps-bundle"), "{log}");
+    assert!(
+        log.contains(&dir.join("M.aum").display().to_string())
+            && log.contains(&dir.join("N.aum").display().to_string()),
+        "both modules in the one invocation:\n{log}"
+    );
+}
+
+/// U17: the argument order is not the build order. `Client` imports `Lib` but
+/// is passed first; the umbrella reads the declarations and hands the compiler
+/// `Lib` before `Client`, measured from the recording front-end's own argv.
+#[test]
+fn a_client_listed_before_its_dependency_is_compiled_after_it() {
+    let dir = scratch("order");
+    let so = build_stageprobe(&dir);
+    let project = project_with_provider(&dir, &so);
+    let austral = recording_front_end(&dir, &cps("compute", 0, 0x01));
+    let client = dir.join("Client.aum");
+    let lib = dir.join("Lib.aum");
+    std::fs::write(
+        &client,
+        "module body Client is\n    import Lib (seven);\nend module body.\n",
+    )
+    .expect("client source");
+    std::fs::write(
+        &lib,
+        "module body Lib is\n    function seven(): Int64 is\n        return 7;\n    end;\nend module body.\n",
+    )
+    .expect("lib source");
+    let out = Command::new(env!("CARGO_BIN_EXE_umbrella"))
+        .arg("--project")
+        .arg(&project)
+        .arg("--austral")
+        .arg(&austral)
+        .arg("--entry")
+        .arg("compute")
+        .arg("--expect")
+        .arg("7")
+        .arg("--")
+        .arg(&client)
+        .arg(&lib)
+        .output()
+        .expect("run umbrella");
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let log = std::fs::read_to_string(dir.join("invocations.log")).expect("invocation log");
+    let lib_at = log.find(&lib.display().to_string()).expect("lib in argv");
+    let client_at = log.find(&client.display().to_string()).expect("client in argv");
+    assert!(
+        lib_at < client_at,
+        "the dependency must be compiled first even when listed second:\n{log}"
+    );
+}
+
 #[test]
 fn a_matching_entry_runs_and_reports_the_result() {
     let dir = scratch("ok");
@@ -357,6 +471,64 @@ fn a_successful_artifact_can_emit_its_trust_record() {
 
 /// U10: the typed artifact event names the exports and the descriptor blocks
 /// (with the digest a project can pin), not just their count.
+/// U18: with no `--cache-dir`, a project document's directory is the cache
+/// home. Two identical invocations of the real binary must compile once: the
+/// recording front-end's log is the measurement, and the second run's stderr
+/// names the hit.
+#[test]
+fn a_project_run_warms_a_project_relative_front_end_cache() {
+    let dir = scratch("binary-cache");
+    let so = build_stageprobe(&dir);
+    let project = project_with_provider(&dir, &so);
+    let austral = recording_front_end(&dir, &cps("compute", 0, 0x01));
+    let module = dir.join("M.aum");
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_umbrella"))
+            .arg("--project")
+            .arg(&project)
+            .arg("--austral")
+            .arg(&austral)
+            .arg("--entry")
+            .arg("compute")
+            .arg("--expect")
+            .arg("7")
+            .arg("--")
+            .arg(&module)
+            .output()
+            .expect("run umbrella")
+    };
+    let invocations = || {
+        std::fs::read_to_string(dir.join("invocations.log"))
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| *line == "compile")
+            .count()
+    };
+
+    let first = run();
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    assert_eq!(stdout(&first).trim(), "RESULT 7", "{}", stderr(&first));
+    assert_eq!(invocations(), 1, "the cold run compiles once");
+    assert!(
+        dir.join(".umbrella-cache").is_dir(),
+        "the cache defaults next to the project document"
+    );
+
+    let second = run();
+    assert_eq!(second.status.code(), Some(0), "{}", stderr(&second));
+    assert_eq!(stdout(&second).trim(), "RESULT 7", "{}", stderr(&second));
+    assert!(
+        stderr(&second).contains("front-end cache hit"),
+        "a warm run must say so: {}",
+        stderr(&second)
+    );
+    assert_eq!(
+        invocations(),
+        1,
+        "the warm run must not spawn the compiler again"
+    );
+}
+
 #[test]
 fn the_artifact_event_carries_exports_and_descriptor_data() {
     let dir = scratch("artifact-event");

@@ -165,25 +165,31 @@ mod d09 {
         let escape = caps
             .read(dh, "d09_mod", "../outside.txt")
             .expect_err("`..` must not resolve");
-        assert!(escape.contains("escapes"), "got: {escape}");
+        assert!(escape.to_string().contains("escapes"), "got: {escape}");
         let absolute = caps
             .read(dh, "d09_mod", "/etc/hostname")
             .expect_err("an absolute path must not resolve");
-        assert!(absolute.contains("absolute"), "got: {absolute}");
+        assert!(
+            absolute.to_string().contains("absolute"),
+            "got: {absolute}"
+        );
 
         // The handle was issued to one module; a neighbour presenting the same
         // number is refused, so a handle is a capability and not a guessable id.
         let foreign = caps
             .write(dh, "other_mod", "notes/a.txt", b"x")
             .expect_err("another module may not use this handle");
-        assert!(foreign.contains("belongs to 'd09_mod'"), "got: {foreign}");
+        assert!(
+            foreign.to_string().contains("belongs to 'd09_mod'"),
+            "got: {foreign}"
+        );
 
         // A frame over the bound is refused rather than allocated.
         let too_big = vec![0u8; MAX_FRAME + 1];
         let over = caps
             .write(dh, "d09_mod", "big.bin", &too_big)
             .expect_err("an oversized write must be refused");
-        assert!(over.contains("exceeds"), "got: {over}");
+        assert!(over.to_string().contains("exceeds"), "got: {over}");
 
         // The net capability addresses exactly the configured peer. A denied
         // peer is refused *before* delivery, so the sink sees nothing.

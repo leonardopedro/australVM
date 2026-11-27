@@ -77,6 +77,7 @@ type cmd =
       (** U07: emit the CPS artifact and stop. No bridge initialization, no JIT
           compile and no C output; `--emit-cps` is required. *)
       emit_cps_only: bool;
+      emit_cps_bundle: bool;
       (** U11: write the canonical adapter descriptors for the foreign calls
           whose signature needs a generated wrapper. *)
       emit_adapters_path: string option;

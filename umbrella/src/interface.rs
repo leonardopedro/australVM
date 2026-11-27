@@ -2194,6 +2194,24 @@ pub fn next_provider_generation() -> u32 {
     }
 }
 
+/// Move the counter past a generation that arrived from outside this process —
+/// a cached adapter crate. A later build must mint a generation the reused
+/// tables refuse, so the counter can never issue one they already used.
+pub fn reserve_generation(generation: u32) {
+    let mut current = PROVIDER_GENERATION.load(std::sync::atomic::Ordering::Relaxed);
+    while current <= generation {
+        match PROVIDER_GENERATION.compare_exchange(
+            current,
+            generation.saturating_add(1),
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
 /// Render the wrappers for one provider build. The generation is the build's,
 /// not the descriptor's: every wrapper this process renders after the first
 /// gets the next number, so a handle minted by an earlier build carries an
@@ -2762,6 +2780,22 @@ pub extern "C" fn @RETIRE_IMPL@(generation: u32) -> i64 {
         "i64, i64",
         "lo, hi",
     ));
+    // The generation-replacement hook. A reload builds a new table and the old
+    // one is never unmapped, so without this every value the old table still
+    // holds would stay owned for the life of the process. Draining runs the
+    // provider's destructors; a live view refuses the drain, so the reload
+    // fails instead of freeing a value a module can still read.
+    let drain_symbol = format!("{}__drain", adapter.target);
+    let drain_impl = format!("{drain_symbol}__impl");
+    out.push_str(&format!(
+        "// Destroy every value this build's table still holds. Called once, by the
+\
+         // reload, before the previous generation is retired.\n\
+         #[export_name = \"{drain_symbol}\"]\n\
+         pub extern \"C\" fn {drain_impl}() -> i64 {{\n\
+         \x20   let mut table = match REGISTRY.lock() {{\n        Ok(table) => table,\n        Err(poisoned) => poisoned.into_inner(),\n    }};\n\
+         \x20   match table.drain() {{\n        Ok(_) => STATUS_OK,\n        Err(_) => STATUS_REFUSED,\n    }}\n}}\n",
+    ));
     Ok(out)
 }
 
@@ -2811,12 +2845,24 @@ impl<'a> GeneratedAdapter<'a> {
 
     /// Symbols a reload calls on the *previous* build. A handle adapter keeps
     /// retained callbacks; its retirement hook closes them so a provider that
-    /// kept a pointer cannot call into JIT code that is gone.
+    /// kept a pointer cannot call into JIT code that is gone. Every handle
+    /// adapter also exposes its table's drain hook, so the values the replaced
+    /// generation still owns are destroyed there instead of leaked.
     pub fn retirement_symbols(&self) -> Vec<String> {
         match self {
             GeneratedAdapter::Handle(a) if a.callback.lifetime != Some(CallbackLifetime::Call) => {
                 vec![format!("{}__retire_callbacks", a.with_symbol())]
             }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Symbols a reload calls on the *previous* build so its live values run
+    /// their provider destructors. Empty for scalar and buffer adapters, which
+    /// hold no table.
+    pub fn drain_symbols(&self) -> Vec<String> {
+        match self {
+            GeneratedAdapter::Handle(a) => vec![format!("{}__drain", a.target)],
             _ => Vec::new(),
         }
     }

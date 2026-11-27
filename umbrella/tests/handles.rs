@@ -1464,6 +1464,137 @@ fn a_host_reload_builds_and_loads_the_next_generation() {
     assert_eq!(unsafe { live() }, 0);
 }
 
+// A provider for the drain test: two targets share one constructor/destructor,
+// so the live counter says whether the replaced generation's values were
+// destroyed. Distinct from the hot provider above so the two tests, which run
+// in the same process, do not share a counter.
+const DRAIN_PROVIDER: &str = r##"
+use std::sync::atomic::{AtomicI64, Ordering};
+static LIVE: AtomicI64 = AtomicI64::new(0);
+
+#[export_name = "avm_drain_ctor"]
+pub extern "C" fn drain_ctor(value: i64) -> *mut core::ffi::c_void {
+    LIVE.fetch_add(1, Ordering::SeqCst);
+    Box::into_raw(Box::new(value)) as *mut core::ffi::c_void
+}
+
+#[export_name = "avm_drain_dtor"]
+pub unsafe extern "C" fn drain_dtor(ptr: *mut core::ffi::c_void) {
+    if ptr.is_null() {
+        return;
+    }
+    LIVE.fetch_sub(1, Ordering::SeqCst);
+    drop(Box::from_raw(ptr as *mut i64));
+}
+
+#[export_name = "avm_drain_live"]
+pub extern "C" fn drain_live() -> i64 {
+    LIVE.load(Ordering::SeqCst)
+}
+"##;
+
+fn drain_provider() -> PathBuf {
+    let dir = scratch("drain-provider");
+    let file = dir.join("lib.rs");
+    std::fs::write(&file, DRAIN_PROVIDER).expect("write provider");
+    let out = dir.join("libdrain_provider.so");
+    let output = {
+        let _build = native_build_lock();
+        Command::new("rustc")
+            .arg("--crate-type=cdylib")
+            .arg("--edition=2021")
+            .arg("--crate-name=drain_provider")
+            .arg("-o")
+            .arg(&out)
+            .arg(&file)
+            .output()
+            .expect("spawn rustc")
+    };
+    assert!(
+        output.status.success(),
+        "the provider must compile:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    umbrella::policy::dlopen(&out).expect("load the provider globally");
+    out
+}
+
+/// A reload through `load_for_jit` destroys the values the replaced table
+/// still owned: the provider's destructors run at replacement instead of the
+/// process leaking them, and the old words are stale afterwards.
+#[test]
+fn a_generation_replacement_drains_the_old_tables_live_values() {
+    let provider = drain_provider();
+    let live = Library::open(&provider).count_fn("avm_drain_live");
+    let mut second_adapter = handle_adapter("avm_drain_next", "hot", 1, None);
+    // Both generations construct and destroy the same provider type.
+    second_adapter.constructor = "avm_drain_ctor".to_string();
+    second_adapter.destructor = "avm_drain_dtor".to_string();
+    let first_adapter = handle_adapter("avm_drain", "hot", 1, None);
+
+    let first = {
+        let _build = native_build_lock();
+        umbrella::adapters::build_next_against(
+            &[GeneratedAdapter::Handle(&first_adapter)],
+            Some(&provider),
+        )
+        .expect("build generation one")
+    };
+    assert!(
+        first.drain_symbols.contains(&"avm_drain__drain".to_string()),
+        "a handle build must export its drain hook: {:?}",
+        first.drain_symbols
+    );
+    umbrella::adapters::load_for_jit(&first).expect("load generation one");
+
+    let first_lib = Library::open(&first.path);
+    let new = first_lib.new_fn("avm_drain__new");
+    let dispose = first_lib.dispose_fn("avm_drain__dispose");
+    let mut a = [0i64; 2];
+    let mut b = [0i64; 2];
+    assert_eq!(unsafe { new(1, a.as_mut_ptr()) }, 0);
+    assert_eq!(unsafe { new(2, b.as_mut_ptr()) }, 0);
+    assert_eq!(unsafe { live() }, 2);
+
+    let second = {
+        let _build = native_build_lock();
+        umbrella::adapters::build_next_against(
+            &[GeneratedAdapter::Handle(&second_adapter)],
+            Some(&provider),
+        )
+        .expect("reload build")
+    };
+    umbrella::adapters::load_for_jit(&second).expect("load the reloaded adapter crate");
+    assert!(
+        second.generation > first.generation,
+        "a reload is a later build ({} then {})",
+        first.generation,
+        second.generation
+    );
+
+    assert_eq!(
+        unsafe { live() },
+        0,
+        "replacing the generation must run the destructors of every value it held"
+    );
+    assert_ne!(
+        unsafe { dispose(a[0], a[1]) },
+        0,
+        "a drained value is stale: its slot moved on"
+    );
+    assert_eq!(unsafe { live() }, 0, "the refusal ran no second destructor");
+
+    // The new generation is a working table of its own.
+    let second_lib = Library::open(&second.path);
+    let new_next = second_lib.new_fn("avm_drain_next__new");
+    let dispose_next = second_lib.dispose_fn("avm_drain_next__dispose");
+    let mut c = [0i64; 2];
+    assert_eq!(unsafe { new_next(3, c.as_mut_ptr()) }, 0);
+    assert_eq!(unsafe { live() }, 1);
+    assert_eq!(unsafe { dispose_next(c[0], c[1]) }, 0);
+    assert_eq!(unsafe { live() }, 0);
+}
+
 // The provider for the live-reload test. Its own image is loaded once, before
 // any wrapper crate, so the wrapper crates' `RTLD_NOW` binding finds these
 // symbols. `wait`/`waiting`/`release` are the host-module gate; `remember`/

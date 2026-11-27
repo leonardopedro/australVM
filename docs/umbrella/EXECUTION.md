@@ -1722,6 +1722,57 @@ The conversion tables are sequenced explicitly in `MBlock` (`let first = … in
 let second = …`) because OCaml's right-to-left argument evaluation would
 otherwise register a temp's ownership after the `match` that consumes it.
 
+**Ownership across a call (2026-11-26).** A checked union passed to another
+function leaves the caller's table instead of being dropped: while lowering a
+call, `note_checked_argument_transfer` records `(callee, parameter index) →
+free symbol` for an argument whose type is the union, and
+`build_cps_function` registers that parameter as owned before converting the
+callee, so the callee's `match` on the parameter releases the union. The same
+transfer is recorded for an `MConcreteMethodCall`, keyed by the instance-method
+id (`callee_meth_key`). That required emitting the method bodies the CPS
+lowering used to drop: `MConcreteInstance` now contributes one function per
+`MConcreteMethod` under `concrete_method_<ins_meth_id>`, the name the call
+site uses, and the method's parameters are registered from the same transfer
+table before its body is converted. Only methods declared in this module use
+that name; an imported instance (and a Pervasive intrinsic such as
+`Austral.Pervasive::trappingAdd`, which the bridge registers under its
+qualified name) keeps the qualified name, so the existing intrinsic
+resolution is unchanged. The
+monomorphizer hoists the parameter into a temp (`let _t = value`), so
+`register_checked_owned` now moves ownership through a copy of an owned
+variable rather than clearing it. A callee can pass the value on again, so
+`compile_module_cps` converts until a pass records no new transfer and keeps
+only the last pass's code (`checked_owned_fn_params` is the fixpoint). This is
+also where the release-before-dispatch order became real: the tree used to
+emit `discard <free>` *after* the `match`, and a case body that `return`s ends
+the function, so every fixture's release was skipped.
+
+**Ownership across a module boundary (2026-11-26).** The transfer above only
+works for a callee whose body *this* compilation emits: a callee lowered in its
+own front-end run has no record naming the caller's provider, so its `match`
+frees nothing. The caller is the side that holds `<symbol>__free`, so the
+release is the caller's: `compile_module_cps` fills `emitted_callee_keys` with
+the decl/monomorph/method ids it emits, and `caller_release_needed` consults it
+at every non-foreign call. A call into a key that is not there is hoisted by
+`caller_release_setup` at the statement boundary: it binds each transferred
+union to a temporary, calls the callee, emits `discard <free>(temporary)`, and
+the statement reads the result temporary (`xfer_hoisting` marks the call's own
+conversion so the expression path neither refuses nor releases it twice).
+The convention is exactly one owner: the callee releases a union this
+compilation recorded as transferred into it, the caller releases any other
+union it passes by value. Two shapes are deliberately excluded and stay
+leaks rather than risking a double free or a use-after-free: a call whose
+declared result is a union (the callee may return the pointer it was given) and
+a call nested inside a larger expression that the statement hoist cannot
+sequence (`austral` refuses that shape at compile time: "A checked union is
+passed to a function whose body this compilation does not emit…"). The CPS for
+`EitherConsumer.computeThrough` reads `let __xfer_arg0 =
+rs_choose_consumer__adapter__checked(1); let __xfer_ret1 =
+consume(__xfer_arg0); discard rs_choose_consumer__adapter__free(__xfer_arg0);
+return __xfer_ret1`, and `a_union_crossing_a_module_boundary_is_released_by_the_caller`
+measures 5000 allocations / 5000 frees / no live bytes (it pinned 5000/0/
+`5000 * 16` before this change).
+
 Evidence: `cargo test --offline --test either_adapters` → 4 passed. The
 descriptor test measures both case names, the tags and the round-trip, refuses
 a partial union block, and requires the `__free` export; the wrapper test
@@ -1733,21 +1784,84 @@ run the real front-end over `umbrella/modules/EitherImport.aum` and
 names and `failure-payload Int64` with the layout's tags (Either 1/0, Result
 0/1), build and load the wrapper, require the CPS to name
 `<symbol>__free`, compile it, and execute `computeRight` → 11 / `computeLeft` →
-22 and `computeOk` → 11 / `computeErr` → 22. `cargo test --offline --lib --test
-checked_adapters --test callbacks_retained` → 110/3/3 passed; `dune build lib/
-bin/ -j 4` under `nix develop "git+file://$PWD#ocaml"` → exit 0. Both fixtures
-are in `scripts/cps-corpus` (marked `@cps`, because the checked call is
-JIT-only and the C backend refuses the generated symbol): `scripts/isa-census
---corpus` → 14 modules, 992 opcode reads, 23 distinct, 23 declared, 0
-uncovered, and the empty `UNREACHABLE_OPCODES` pin still holds.
+22, `computeOk` → 11 / `computeErr` → 22, and `computeThrough` → 11 (the
+checked union crosses into `consume` and is released there — same module). `cargo test
+--offline --lib --test checked_adapters --test callbacks_retained` → 110/3/3
+passed; `dune build lib/ bin/ -j 4` under `nix develop
+"git+file://$PWD#ocaml"` → exit 0. Both fixtures are in `scripts/cps-corpus`
+(marked `@cps`, because the checked call is JIT-only and the C backend refuses
+the generated symbol): `scripts/isa-census --corpus` → 14 modules, 1024 opcode
+reads, 23 distinct, 23 declared, 0 uncovered, and the empty
+`UNREACHABLE_OPCODES` pin still holds. `scripts/clif2mm0 --write` re-measured
+the corpus at 20 forms / 918 instructions, and the dependent content pins
+(`store_projection.mm0`/`.mm1`, the toy's citation of it, and the two
+`proof_chain` artifacts) were refreshed to the new digests.
+
+**The free path, measured (2026-11-26).** `umbrella/tests/either_allocations.rs`
+builds the same generated wrapper in a crate with a counting global allocator
+and exports its counters, so the allocation and release of the wrapper's
+`Box<[u64; 2]>` are observed rather than inferred. 2000 `__checked` + `__free`
+pairs allocate exactly 2000 times, free exactly 2000 times and leave no live
+bytes; 500 unreleased calls are visible as 500 live 16-byte allocations, and
+releasing them returns the counter to its baseline (the counter can see the
+leak it is checking for); and 5000 JIT executions of `computeThrough` allocate
+5000 times, free 5000 times and leave nothing live — the callee's `match`
+releases the union it was passed. Measured negative control: with the release
+moved back after the case dispatch, the same test fails at the JIT step with
+`the callee's match releases the union it was passed: left: 0, right:
+5000` — the returning cases skip the discard — and with the release before the
+dispatch it passes.
+
+The file now carries three measurements. `a_concrete_method_releases_the_union_it_is_passed`
+uses `umbrella/modules/EitherMethod.aum`, where the checked union is an
+argument of a concrete instance method (`Sink(Int64)`'s `send`, so the call is
+an `MConcreteMethodCall`): 5000 JIT calls allocate 5000 times, free 5000 times
+and leave no live bytes, because the method's own `match` releases it.
+Measured negative control: with the transfer note disabled the same test fails
+with `the method's match releases the union it was passed: left: 0, right:
+5000`. `a_union_crossing_a_module_boundary_is_released_by_the_caller` compiles
+`EitherProducer` and `EitherConsumer` as separate CPS artifacts, passes
+`EitherConsumer`'s checked union to `EitherProducer.consume`, and measures the
+release: the value crosses correctly (`computeThrough` → 11) and 5000 calls
+allocate 5000 times, free 5000 times and leave no live bytes. The producer was
+compiled on its own and cannot name the caller's `__free`, so the *caller*
+releases the union after the call returns — `lib/Compiler_cps.ml`'s
+`caller_release_setup` hoists `let __xfer_arg0 = <union>; let __xfer_ret1 =
+consume(__xfer_arg0); <free>(__xfer_arg0); return __xfer_ret1` at the
+statement boundary. Measured before the change, the same test pinned the leak:
+5000 allocations, 0 frees, `5000 * 16` live bytes.
+
+`cargo test --offline --test either_allocations` → 3 passed (≈149 s, mostly
+the wrapper and JIT builds).
+
+**Descriptor goldens (2026-11-26).** `test-programs/adapters/either.golden` and
+`result.golden` pin the two checked-union descriptors, emitted from the two
+fixtures through the CPS-only path (the C backend has no checked symbol).
+`scripts/check-adapter-descriptors` compiles them and diffs byte for byte along
+with the scalar and handle goldens; all four match.
 
 Limitations: a `Result`/`Either` whose error case is empty is not admitted
 (the `Option` arm is name-based). The release is emitted for the `match` that
-consumes the call — directly, or through the local/temp the value is bound to
-(the table follows the name until the match, and a rebinding clears it). A
-result that is never matched, or whose name is rebound first, is not released —
-a leak, not a wrong free, and the linear type system makes the unconsumed value
-a type error in the fixtures' shape. A provider in a separate
+consumes the call — directly, through the local/temp the value is bound to (the
+table follows the name until the match, and a rebinding clears it), or in the
+callee a call transfers it to, or by the caller when the callee's body is not
+in this compilation. A result that is never matched, whose name is rebound
+first, or that is passed through a function pointer (`MFptrCall`) is not
+released — a leak, not a wrong free, and the linear type system makes the
+unconsumed value a type error in the fixtures' shape. The cross-module case is
+measured: `EitherConsumer`'s checked union reaches `EitherProducer.consume`,
+which reads it correctly and does not release it (its own compilation has no
+transfer record); the caller releases it after the call returns
+(`a_union_crossing_a_module_boundary_is_released_by_the_caller`). The
+convention that makes this sound: a checked union passed by value to a callee
+whose body this compilation does not emit is owned by the caller until the call
+returns, so exactly one side frees — the callee only releases a union this
+compilation recorded as transferred into it. A call whose declared result is a
+union is exempt (the callee may return the pointer it was given), and a call in
+a position that cannot sequence the release (an operand of a larger expression)
+is refused at compile time rather than silently leaked. A transferred parameter
+that the callee never matches is still a leak; the transfer does not invent a
+release point. A provider in a separate
 dylib cannot have its panic caught by the wrapper's `catch_unwind` (`Rust
 cannot catch foreign exceptions`: each Rust dylib carries its own panic
 runtime), so the live test's provider does not panic; the
@@ -1755,3 +1869,346 @@ caught-panic-to-failure mapping is measured in the same-crate wrapper tests. A
 checked Option import whose union monomorph is missing locally is resolved by
 shape; the compiler refuses rather than guesses when more than one
 `Option`-shaped layout exists.
+
+## U17 — one bundled CPS artifact and a derived build order (slice, 2026-11-26)
+
+**The bundle.** The CPS lowering writes one module's functions per `compile_mod`
+call, each truncating `--emit-cps`, so the umbrella compiled one artifact per
+dependency prefix (`[A]`, `[A, B]`, `[A, B, C]`) and loaded them all into the
+JIT. `--emit-cps-bundle` (with `--emit-cps-only`) accumulates every module's
+functions in `Compiler.bundled_functions` and writes the artifact once, from
+`Compiler.flush_cps_bundle`, after the whole source list has been lowered
+(`Vm_plugin`'s compiler calls it). The per-module `CPS JIT: module <name>`,
+export lines and adapter-descriptor writes are unchanged; the one
+`CPS JIT: Generated <n> functions (<m> bytes)` / `Emitted CPS binary to <path>`
+pair describes the bundle, which is the line the host front-end already parses.
+A lowering failure raises before the flush, so no partial artifact is written;
+`--emit-cps-bundle` without `--emit-cps-only` is refused by `CliEngine`.
+`umbrella/src/frontend.rs` passes the flag and `umbrella/src/main.rs` now
+compiles the source list once (`let artifacts = vec![frontend::compile(austral,
+&ordered, liquid_required)?]`), so the JIT holds one artifact containing every
+dependency as well as the entry module.
+
+Measured on the two-module fixture: `./austral compile
+umbrella/modules/EitherProducer.{aui,aum} umbrella/modules/EitherConsumer.aum
+--use-cps-jit --emit-cps-only --emit-cps-bundle …` prints one `Generated 3
+functions (734 bytes)` for `consume`, `computeThrough` and `main`.
+`umbrella/tests/entry.rs`'s `a_two_module_list_is_one_bundled_front_end_invocation`
+uses a recording front-end (one log line per argument per invocation): a
+two-module umbrella run logs exactly one `compile`, `--emit-cps-bundle`, and
+both module paths, and the run returns `RESULT 7`. `cargo test --offline --test
+entry` → 10 passed.
+
+**The module list.** The list is no longer required to be *typed* in
+dependency order. `frontend::check_dependency_order` first refuses the shapes
+no ordering can satisfy: a module name declared twice (the refusal names both
+paths and positions, because the second definition would enter the JIT's flat
+function table beside the first), an import cycle among listed modules (the
+refusal prints the path, e.g. A -> B -> A) and a self-import. `import_cycle` is
+a DFS over the listed-only edges, so an import of a module outside the list (a
+built-in, a Rust provider) cannot close a cycle here and stays the compiler's
+business.
+
+`frontend::dependency_order` then returns the build order — positions into the
+source list, each module after the listed modules it imports — and
+`umbrella/src/main.rs` hands the compiler that order. It is Kahn's algorithm
+with the caller's order as the tie-break, so modules with no constraint between
+them keep the order they were given, and the unreachable branch (leftover
+modules) is a named refusal rather than an infinite loop; a genuine cycle was
+already refused above. Because a client is not imported by its dependencies, it
+still lands last and the bundle keeps its name. Measured by the entry test
+`a_client_listed_before_its_dependency_is_compiled_after_it`: `Client.aum`
+(which imports `Lib`) is passed first, and the recording front-end's argv shows
+`Lib.aum` before `Client.aum`. `cargo test --offline --test entry` → 11 passed;
+`cargo test --offline --lib frontend::` → 22 passed (the duplicate, self-import
+and two- and three-module-cycle refusals plus the stable, the reversed and the
+three-deep ordering cases).
+`CliParserTest.exe` → 5 tests OK, the fifth being `--emit-cps-bundle` beside
+`--emit-cps-only` (`--emit-cps=out.cps`, one module, `--target-type=tc`): the
+flag parses to `true` without consuming the source list or the CPS path.
+
+The adapter document is written once per module, but the descriptor tables
+(`required_adapters`, `required_handles`) are module-level and never reset, so
+each write is cumulative and the final one — the only one a bundled run leaves
+on disk — carries every module's descriptors. Measured on the same fixture:
+two `Emitted adapter descriptors` lines, and the document at the staged path
+holds the consumer's `symbol rs_choose_consumer__adapter` block, which is the
+only adapter the pair declares. A bundle that compiled the entry module last
+would therefore still lose nothing.
+
+Limitations: the bundle is named after the last module *built*, which is the
+client in a project whose dependencies are listed as imports of it, but a
+helper module listed after the client and imported by nothing keeps its place
+and its name; the ordering check reads only `module`/`module body`/`import`
+declaration lines, so a module whose name is spelled with an argument list or a
+qualified import beyond the first token is the compiler's report, not this
+check's; and two modules that declare the same adapter symbol with different
+signatures are resolved last-wins by the descriptor table rather than refused
+(the export list refuses that collision for functions, not yet for adapters).
+
+## U18 — a content-addressed run cache (slice, 2026-11-26)
+
+**What is cached.** One key covers the run's derived, non-executing artifacts,
+under `<cache>/<key>/`:
+
+* the front-end artifact (`module.cps` + `artifact.json`): the CPS bundle and
+  the compiler's reported facts, including the adapter document;
+* the provider build (`provider/<library>` + `provider.json`): the cdylib cargo
+  produced, copied so one stable path is mapped, linked and trust-checked;
+* the generated adapter crate (`adapters/<digest>/`): the compiled wrapper
+  image, keyed by its rendered source, generation, provider image/path and
+  bridge rlib.
+
+The key covers the cache schema and the literal lowering arguments
+(`--use-cps-jit --emit-cps-only --emit-cps-bundle --target-type=tc`), the liquid
+mode, the compiler binary's bytes, every source file's bytes in the **derived
+leaf-first order** (which carries both the sources and their import graph), and
+— when a build is authorized — the provider crate tree, the explicit build
+request (package, target dir, profile, features, locked/offline), the recorded
+build-affecting environment and the `cargo`/`rustc` version report. A project
+document defaults the cache to `<project dir>/.umbrella-cache`;
+`--cache-dir <dir>` overrides it, and a run with no project document keeps the
+cache off. The artifact event still carries
+`"cache": "hit"|"miss"|"invalid"|"disabled"` and the key.
+
+**The hit is bytes, not an admission.** The cache sits before
+`trust::verify_before_build`/`verify_before_load`/`verify_artifact`,
+`install_auth` and the JIT call gate; a hit still has to pass the project's
+signature/descriptor pins and every `uk_*`/`uz_*` call still goes through
+UK-4001. No grant, digest or signature decision is stored in the entry.
+
+**A bad entry cannot answer.** Each record is re-checked on every load: the CPS
+digest is recomputed and compared, the CPS must be non-empty, the
+function/export counts must be non-zero, and the recorded module list must
+equal the requested one; the provider and adapter copies are re-hashed against
+their records. Files are written aside and renamed into place, so a reader sees
+no entry or a complete one, and two writers of one key agree because equal
+inputs produce equal bytes. A refused entry is reported and the bad half is
+removed (`invalidate` / `invalidate_provider`) before the fresh artifact is
+stored — the failing test exposed that a refusal which left the bytes behind
+repeated forever and recompiled on every run.
+
+**Measured.** `cargo test --offline --lib cache::` → **6 passed** (the original
+round trip / digest refusals / missing-entry cases, plus provider copy round
+trip and corrupt-copy refusal, a key that moves on an edited provider crate or
+build request and differs from a run with no provider, and an adapter digest
+that moves with the generation plus store/load by digest).
+`cargo test --offline --test cache` → **7 passed**: the compiler is a script
+that embeds a run counter and writes a fixed adapter document, so the warm test
+asserts the counter stays at 1 and the artifact is byte-identical; an edited
+source, an edited `import` line, a re-written compiler binary and the liquid
+mode each move the key and recompile; a truncated entry is reported as
+`Invalid` and the next run is warm again; with no cache directory every run
+compiles. `cargo test --offline --test entry` → **12 passed**, including
+`a_project_run_warms_a_project_relative_front_end_cache`: two runs of the real
+binary with no `--cache-dir` write `<project dir>/.umbrella-cache`, the first
+lands in the recording front-end's log once, the second reports
+`front-end cache hit` and adds no invocation. `cargo test --offline --lib cli::`
+→ 18 passed; `--test cli` → 8 passed.
+
+One real-compiler measurement through the same seam (`EitherProducer.{aui,aum}`,
+unoptimized test build, temporary harness, deleted afterwards): cold **749 ms**,
+warm **556 ms**, same 458-byte CPS and 241-byte adapter document. The warm call
+does no compiler work; its remaining cost is SHA-256 over the 9.3 MB `austral`
+binary in an unoptimized build, which is why the wall-clock gap is small here
+and is not presented as a speedup. The script test is the exact evidence that
+the subprocess does not run.
+
+**Generation replacement drains live handles.** A provider reload used to
+retire the replaced build's retained callbacks but leave every value its handle
+table still owned alive for the life of the process. `HandleRegistry::drain`
+now destroys every live value and advances its slot generation; each rendered
+handle adapter exports `<target>__drain`, and `adapters::load_for_jit` calls the
+old builds' hooks before retiring callbacks and mapping the next crate. A live
+borrow makes the table refuse, and the reload stops while the old build is
+still intact instead of freeing a value a module can still read. Measured:
+`cargo test --offline --no-default-features --features cedar,tier1-rs --lib
+handles::tests::draining` → 1 passed (two live values drained; a held borrow
+refuses the whole drain); `cargo test --offline --test handles
+a_generation_replacement_drains_the_old_tables_live_values` → 1 passed (two
+provider values are constructed in generation one, loading generation two drops
+both to zero live, the old words are stale, and the new table mints and
+destroys its own); `cargo test --offline --test callbacks_retained` → 3 passed,
+so the drain-before-retire order did not change the callback retirement the
+reload contract already had.
+
+Limitations: the provider and adapter halves are covered by keying/storage
+unit tests, not by a measured cold/warm provider build through the binary (only
+the front-end warm path is measured end to end), so the adapter-crate reuse
+assumes one adapter build per process — a second build in the same process
+mints a new generation and therefore a new key; the provider key hashes what
+umbrella can see (crate tree, request, environment, toolchain) and deliberately
+not the cargo registry, path dependencies outside the crate directory or
+build-script inputs, so a project that pins `library_sha256` is the backstop
+that refuses stale provider bytes; the key includes each module's path and the
+whole compiler digest, which over-invalidates on a moved tree; JIT compilation
+is still not cached; concurrent invocations sharing one cache directory are not
+tested (`RUN08`).
+
+## U19 — right-scoped, rooted filesystem capabilities (2026-11-26)
+
+**What changed.** A directory capability is now an open descriptor, not a path
+the host re-resolves. `RootDir` opens the approved root once with
+`O_DIRECTORY | O_NOFOLLOW`; every operation walks the relative path one
+component at a time with `openat(..., O_NOFOLLOW)` from that descriptor, so a
+symlink swapped in between any two steps is refused by the kernel (ELOOP or
+ENOTDIR, classified as `Escape`), not followed by it. The lexical rules stay
+first — empty, absolute, NUL and `..` are refused before a syscall — but they
+are no longer the boundary. No path string is handed back to the host at any
+point.
+
+`FsRights` (`read`, `write`, `create`, `list`, `delete`, `rename`, parsed from
+a comma list) is what a handle carries. `InstanceCaps::new_with_grants` opens
+the state directory as root 0 with the rights a document states, plus each
+extra `RootGrant` (a state-directory-relative subtree and its own rights). A
+granted root is provisioned inside the instance's own tree when absent; an
+existing symlink or file is refused. `open_root(index)` is the only way to
+reach one, and `rs_cap_open_root` exposes it to a module — with an index, never
+a path. `create` and `write` remain separate, so a writer cannot grow the tree
+it may only edit; `delete` refuses directories; `rename` uses
+`RENAME_NOREPLACE` where the kernel has it (the old `fstatat` guard is the
+documented fallback on kernels without `renameat2`).
+
+**Grants, quota and lifetime.** The manifest accepts
+`[grants] fs = ["data/", { root = "cache/", rights = "read,list" }]`; a plain
+string is the historical all-rights grant, a table without `rights` is refused.
+`[limits] max_write_bytes` is the cumulative write quota. The project document
+adds `capabilities.rights`, `capabilities.roots` (`{ path, rights }`, relative
+to `state_dir`) and `capabilities.quota_bytes`, all validated by name. A
+hot-swap may narrow these grants but not widen them: a new path, a new right on
+an existing path, a dropped quota or a larger one is refused with UK-4001.
+`revoke(handle)` and `revoke_all()` are checked before every syscall and every
+new open; installing a replacement or uninstalling a set revokes the old one,
+so a cloned `Arc` observes a dead capability rather than one more call. Handles
+hold the root through an `Arc`; closing the last one closes the descriptor.
+
+**ABI.** `rs_cap_open_root`, `rs_cap_list` (newline-separated names, required
+length negated when the buffer is short), `rs_cap_delete`, `rs_cap_rename` and
+`rs_cap_revoke` join the existing verbs in `RS_FFI_SYMBOLS`, each gated by name
+like any other `rs_*` call. `CAP_ERR_NOT_FOUND` (-7) and `CAP_ERR_REVOKED` (-8)
+stay distinct so a caller can tell "not there" from "withdrawn" from "you may
+not". The documented collision with the negated-required-length convention is
+unchanged.
+
+**Measured.** `cd safestos/cranelift && cargo test --offline
+--no-default-features --features cedar,tier1-rs --lib fs_tests` → **14 passed**.
+The new cases: each approved root carries its own rights and index (and a root
+outside index range is refused); a granted root cannot escape the state
+directory (lexical `..` and a symlinked root are both refused); the quota is
+cumulative and refuses before opening the target (old bytes survive); revocation
+refuses every verb, a closed handle cannot be re-presented, and `revoke_all`
+refuses handles that outlive it and every later open; installing a replacement
+or uninstalling revokes the previous set; the ABI verbs open root 0, write,
+list (`a.txt\nb.txt`), rename, delete, report `NOT_FOUND` for a missing file and
+`REVOKED` after `rs_cap_revoke`; a malformed manifest entry is refused by name.
+The symlink-race case runs a swapper thread that alternates a real directory
+(with `inside`) and a symlink to an outside directory for 400 reads: every read
+returns `inside` or an inside-but-empty file or a typed refusal, never the
+outside sentinel, whose bytes are unchanged afterwards. The same run measured
+`cargo test --offline --lib project::` (reduced features) → **13 passed**,
+including the new capability rights/roots/quota parse and the six malformed
+forms, and the full bridge `--lib` suite → 142 passed, 1 failed
+(`cps::a10_live_grant_tests::an_instance_context_is_the_authority_and_a_stale_one_is_refused`,
+which needs `unfer-kernel` for `uk_version` to be a declared symbol and so
+cannot pass in this reduced build).
+
+Limitations: an externally created hardlink to a file outside the root is still
+not detected (there is no `openat2` `RESOLVE_BENEATH`/inode check yet); the
+quota is one cumulative figure per instance, not a live per-root usage; the
+manifest rights and the project rights are measured at the parser and
+`InstanceCaps` level, not by a run of the umbrella binary with a capability
+document (the `distributed_io` demo names no `[grants] fs`, so it keeps the
+historical all-rights state-directory handle); `tests/capstd_tests.rs` still
+cannot be compiled here because the `netcert` binary requires `unfer-kernel`
+while the sibling `unfer` checkout is mid-merge, and `capstd` cannot be enabled
+offline on this host (uncached `cap-primitives`). AUT06, FS07 and FS08 remain.
+
+## U20 — bounded network capabilities (2026-11-26)
+
+**What changed.** A `Net` handle was previously a demo sink with a configured
+peer list; it had no socket and no address policy. It is now a **dial**
+capability. `safestos/cranelift/src/netstd_mod.rs` holds `NetPolicy`, which the
+host builds from the manifest: `[grants] net` names approved endpoints
+(`host:port`, a bare host meaning port 443, `*.example.com` matching
+subdomains only), `[grants] net_ips` names the address ranges the name may
+resolve into (CIDR or a single address; an empty list refuses every dial rather
+than meaning "any"), `[grants] net_ca` names a PEM/DER trust-anchor bundle
+relative to the module directory, and `[limits] net_timeout_ms` is the connect
+and per-IO deadline (default 5 s). An empty `[grants] net` issues no policy at
+all, so `open(Kind::Net)` refuses and a module can never hold a handle it could
+not use. The project document has the same block under
+`capabilities.network = { endpoints, allow_ips, ca, timeout_ms }`; `ca` is
+relative to the project document, the parsed values are validated by field
+(endpoint, CIDR, zero deadline, empty list, empty anchor), and the umbrella
+`main` attaches the built policy before installing the instance.
+
+**Enforcement point.** `NetPolicy::dial` re-checks the requested endpoint, then
+resolves the name and requires **every** resolved address to be inside the
+approved ranges before any connection is attempted; a name that resolves partly
+outside is refused instead of retried through the denied address (the
+DNS-rebinding case). The connection is `connect_timeout`-bounded and carries
+read/write deadlines. With `tls` set, rustls performs the handshake during the
+dial, against the granted anchors and the requested server name (DNS name or IP
+SAN); a failed identity check is `CAP_ERR_TLS`, there is no plaintext fallback,
+and a policy with no anchor refuses TLS outright. Redirects, proxy hops and
+reconnects are not special-cased in the transport: each is a new dial through
+the same handle and policy, so the destination is re-checked rather than
+inheriting the first connection's verdict.
+
+**ABI and lifetime.** `rs_cap_net_dial`, `rs_cap_net_read`, `rs_cap_net_write`,
+`rs_cap_net_shutdown` and `rs_cap_net_unsupported` join `RS_FFI_SYMBOLS`. A
+`Net` handle owns at most one connection; `revoke` drops it immediately and
+refuses every later verb, and `close`/`revoke_all`/replacement/uninstall drop it
+with the handle. `CAP_ERR_TIMEOUT` (-9), `CAP_ERR_TLS` (-10),
+`CAP_ERR_UNSUPPORTED` (-11) and `CAP_ERR_IO` (-12) are distinct from both a
+rights refusal and `NOT_FOUND`. UDP, listening and raw sockets have no rights
+model and are refused by name (`rs_cap_net_unsupported`); an unknown operation
+name is a refusal, not an accepted no-op. A hot-swap may narrow the endpoint
+list, the address ranges, the deadline, or keep the same anchor; a new endpoint,
+range, dropped/lengthened deadline or changed anchor is refused with UK-4001.
+
+**Measured.** `cd safestos/cranelift && cargo test --offline
+--no-default-features --features cedar,tier1-rs --lib net` → **14 passed**: the
+endpoint/cidr/PEM parsers; a policy with an endpoint but no range refusing a
+resolvable name; a handle without a policy never being issued; a denied endpoint
+whose listener counts **zero** accepted connections; an allowed loopback dial
+carrying `ping`/`pong` with the dialed peer address reported; `localhost`
+resolving outside the approved ranges refused before connecting (also zero
+accepts); TLS accepting a certificate for `127.0.0.1` under the granted CA and
+refusing the same CA's `good.test`-only certificate for that address as
+`CAP_ERR_TLS`, with no connection retained; ABI `rs_cap_net_open`/`dial`/
+`revoke`/`write` and `udp`/`listen`/`raw-socket` returning
+`CAP_ERR_UNSUPPORTED`; and the manifest swap test narrowing endpoints/ranges/
+deadline while refusing every widening direction; a resolver that does not
+answer releases the caller at the deadline while a real lookup still returns
+its addresses; and an executed HTTP redirect fixture where the second hop is a
+fresh checked dial — followed successfully when both endpoints are granted, and
+refused with **zero** connections to the target when only the redirecting
+endpoint is. The TLS fixtures are local
+(CA, a `localhost`+`127.0.0.1` server certificate and a `good.test`-only one,
+same key) under `tests/fixtures/tls/`; no public network is contacted. The U19
+regression run `--lib fs_tests` → **14 passed**. Umbrella `cargo test --offline
+--lib project::` (reduced bridge features) → **15 passed**, including the new
+network parse/build test and seven malformed forms named by field;
+`cargo check --offline --bin umbrella` → 0. The full reduced-feature bridge
+`--lib` suite → 156 passed, 1 failed: the pre-existing
+`cps::a10_live_grant_tests::an_instance_context_is_the_authority_and_a_stale_one_is_refused`,
+which needs `unfer-kernel` for `uk_version` to be a declared symbol and cannot
+pass in this reduced build. `cargo check --offline --lib` in `umbrella` (reduced
+bridge features) also passes, with `Cargo.toml` and `Cargo.lock` restored
+afterwards.
+
+Limitations: resolution is bounded for the *caller* by running `getaddrinfo` on
+its own thread, but the lookup itself cannot be cancelled, so an abandoned
+thread can linger until the resolver returns (it cannot stall the dial). There
+is no HTTP/TLS client library on top — the redirect fixture lives in the test,
+and proxy, redirect and credential policy belong to the module's protocol; the
+capability enforces the **dial** (and TLS identity), not application headers. The trust
+anchor is a file named by the manifest, not the host's system root store; a
+module with no `net_ca` cannot use TLS at all. Only outbound TCP is represented.
+The project wiring is measured at the document/`InstanceCaps` level and by
+`cargo check` of the binary, not by a full project run that dials (no fixture
+project executes a network call yet); NET03's redirect is an executed loopback
+fixture, while a real proxy hop and a cross-instance socket-token reuse are not
+fixtured; NET05 is measured for handle revocation, not for a socket token reused
+by another instance.

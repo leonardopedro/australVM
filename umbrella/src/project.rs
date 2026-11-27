@@ -13,6 +13,8 @@
 
 use std::path::{Path, PathBuf};
 
+use austral_cranelift_bridge::capstd_mod::caps::{FsRights, RootGrant};
+use austral_cranelift_bridge::netstd_mod::{Endpoint, IpNet, NetPolicy};
 use serde::Deserialize;
 
 /// The only schema version this build understands.
@@ -115,10 +117,23 @@ pub struct TrustedArtifact {
     pub descriptor_sha256: Option<String>,
 }
 
-/// D09: the capabilities the running instance gets. Stated in the document so a
-/// run names its own state directory and peers explicitly instead of inheriting
-/// an ambient root, and so a missing block means "no capabilities" rather than
-/// "whatever the host can reach".
+/// U19: one approved subtree with the rights its handles carry. `path` is
+/// relative to `capabilities.state_dir`, so a grant cannot name a root outside
+/// the instance directory.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilityRoot {
+    pub path: PathBuf,
+    /// Comma-separated rights (`read`, `write`, `create`, `list`, `delete`,
+    /// `rename`, or `all`). Required: a root without stated rights would be an
+    /// implicit all-rights grant.
+    pub rights: String,
+}
+
+/// D09/U19: the capabilities the running instance gets. Stated in the document
+/// so a run names its own state directory, roots, rights and peers explicitly
+/// instead of inheriting an ambient root, and so a missing block means "no
+/// capabilities" rather than "whatever the host can reach".
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Capabilities {
@@ -126,9 +141,104 @@ pub struct Capabilities {
     /// path is resolved against the project document, never against the
     /// developer's shell.
     pub state_dir: PathBuf,
+    /// U19: rights for a handle on the state directory itself. Absent keeps the
+    /// historical all-rights grant.
+    #[serde(default)]
+    pub rights: Option<String>,
+    /// U19: additional approved roots, each opened only by index and carrying
+    /// exactly its own rights.
+    #[serde(default)]
+    pub roots: Vec<CapabilityRoot>,
+    /// U19: cumulative bytes the instance may write through its capabilities.
+    /// Absent means no quota.
+    #[serde(default)]
+    pub quota_bytes: Option<u64>,
     /// Exactly the peers the instance may address. Empty means none.
     #[serde(default)]
     pub peers: Vec<String>,
+    /// U20: the network capability. Absent means no network authority at all;
+    /// a `Net` handle is never issued.
+    #[serde(default)]
+    pub network: Option<NetworkCapability>,
+}
+
+/// U20: the endpoints, resolved-address ranges, trust anchor and deadline one
+/// project instance may dial. The project document is host-authored, so this is
+/// the same grant the manifest spells as `[grants] net`/`net_ips`/`net_ca`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkCapability {
+    /// Approved `host:port` endpoints (a bare host means port 443).
+    pub endpoints: Vec<String>,
+    /// Address ranges every resolved address must fall inside (CIDR or a
+    /// single address).
+    pub allow_ips: Vec<String>,
+    /// PEM or DER trust-anchor bundle, relative to the project document. Absent
+    /// means TLS is refused rather than downgraded.
+    #[serde(default)]
+    pub ca: Option<PathBuf>,
+    /// Connect and per-IO deadline.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+impl Capabilities {
+    /// The rights a handle on the state directory carries.
+    pub fn state_rights(&self) -> Result<FsRights, String> {
+        match &self.rights {
+            None => Ok(FsRights::ALL),
+            Some(text) => FsRights::parse(text),
+        }
+    }
+
+    /// U20: build the network policy the instance dials under. `base` is the
+    /// project document's directory, which a relative `ca` resolves against. A
+    /// document with no `network` block grants nothing and yields no policy.
+    pub fn net_policy(&self, base: &Path) -> Result<Option<NetPolicy>, String> {
+        let Some(net) = &self.network else {
+            return Ok(None);
+        };
+        let anchors = match &net.ca {
+            Some(path) => {
+                let path = if path.is_absolute() {
+                    path.clone()
+                } else {
+                    base.join(path)
+                };
+                let bytes = std::fs::read(&path).map_err(|e| {
+                    format!("capabilities.network.ca {}: {e}", path.display())
+                })?;
+                austral_cranelift_bridge::netstd_mod::certs_from_pem(&bytes)
+                    .map_err(|e| format!("capabilities.network.ca: {e}"))?
+            }
+            None => Vec::new(),
+        };
+        NetPolicy::new(
+            &net.endpoints,
+            &net.allow_ips,
+            anchors,
+            std::time::Duration::from_millis(net.timeout_ms.unwrap_or(5000)),
+        )
+        .map(Some)
+        .map_err(|e| format!("capabilities.network: {e}"))
+    }
+
+    /// The extra roots, parsed into the form the capability set opens.
+    pub fn root_grants(&self) -> Result<Vec<RootGrant>, String> {
+        let mut grants = Vec::new();
+        for (index, root) in self.roots.iter().enumerate() {
+            let path = root.path.to_str().ok_or_else(|| {
+                format!("capabilities.roots[{index}].path is not valid UTF-8")
+            })?;
+            let rights = FsRights::parse(&root.rights)
+                .map_err(|e| format!("capabilities.roots[{index}].rights: {e}"))?;
+            grants.push(RootGrant {
+                root: path.to_string(),
+                rights,
+            });
+        }
+        Ok(grants)
+    }
 }
 
 /// U09: the user on whose behalf the instance acts. The module stays the grant
@@ -207,9 +317,38 @@ pub fn parse(path: &Path, text: &str) -> Result<Project, String> {
     reject_unknown_in(
         &value,
         "capabilities",
-        &["state_dir", "peers"],
+        &[
+            "state_dir",
+            "rights",
+            "roots",
+            "quota_bytes",
+            "peers",
+            "network",
+        ],
         &mut unknown,
     );
+    if let Some(network) = value.get("capabilities").and_then(|c| c.get("network")) {
+        reject_unknown(
+            network,
+            "capabilities.network.",
+            &["endpoints", "allow_ips", "ca", "timeout_ms"],
+            &mut unknown,
+        );
+    }
+    if let Some(roots) = value
+        .get("capabilities")
+        .and_then(|c| c.get("roots"))
+        .and_then(|r| r.as_array())
+    {
+        for (i, root) in roots.iter().enumerate() {
+            reject_unknown(
+                root,
+                &format!("capabilities.roots[{i}]."),
+                &["path", "rights"],
+                &mut unknown,
+            );
+        }
+    }
     reject_unknown_in(
         &value,
         "trusted",
@@ -327,9 +466,80 @@ fn validate(path: &Path, p: &Project) -> Result<(), String> {
         if caps.state_dir.as_os_str().is_empty() {
             problems.push("`capabilities.state_dir` is empty".to_string());
         }
+        if let Err(e) = caps.state_rights() {
+            problems.push(format!("`capabilities.rights`: {e}"));
+        }
+        for (i, root) in caps.roots.iter().enumerate() {
+            if root.path.as_os_str().is_empty() {
+                problems.push(format!("`capabilities.roots[{i}].path` is empty"));
+            } else if root.path.is_absolute() {
+                problems.push(format!(
+                    "`capabilities.roots[{i}].path` is absolute; it must be relative to \
+                     `capabilities.state_dir`"
+                ));
+            } else if root
+                .path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                problems.push(format!(
+                    "`capabilities.roots[{i}].path` contains `..`; it must stay inside \
+                     `capabilities.state_dir`"
+                ));
+            }
+            match FsRights::parse(&root.rights) {
+                Err(e) => problems.push(format!("`capabilities.roots[{i}].rights`: {e}")),
+                Ok(FsRights::NONE) => problems.push(format!(
+                    "`capabilities.roots[{i}].rights` names no right; a root without a \
+                     right is not a capability"
+                )),
+                Ok(_) => {}
+            }
+        }
         for (i, peer) in caps.peers.iter().enumerate() {
             if peer.trim().is_empty() {
                 problems.push(format!("`capabilities.peers[{i}]` is empty"));
+            }
+        }
+        // U20: a network block is a grant, so it must name something to reach
+        // and an address range to reach it through. A half-written block is
+        // refused by field rather than silently becoming an empty policy.
+        if let Some(net) = &caps.network {
+            if net.endpoints.is_empty() {
+                problems.push(
+                    "`capabilities.network.endpoints` is empty; omit `network` instead of \
+                     granting nothing"
+                        .to_string(),
+                );
+            }
+            for (i, endpoint) in net.endpoints.iter().enumerate() {
+                if let Err(e) = Endpoint::parse(endpoint) {
+                    problems.push(format!("`capabilities.network.endpoints[{i}]`: {e}"));
+                }
+            }
+            if net.allow_ips.is_empty() {
+                problems.push(
+                    "`capabilities.network.allow_ips` is empty; every dial would be refused"
+                        .to_string(),
+                );
+            }
+            for (i, range) in net.allow_ips.iter().enumerate() {
+                if let Err(e) = IpNet::parse(range) {
+                    problems.push(format!("`capabilities.network.allow_ips[{i}]`: {e}"));
+                }
+            }
+            if net.timeout_ms == Some(0) {
+                problems.push(
+                    "`capabilities.network.timeout_ms` is 0; every dial would time out"
+                        .to_string(),
+                );
+            }
+            if net
+                .ca
+                .as_ref()
+                .is_some_and(|path| path.as_os_str().is_empty())
+            {
+                problems.push("`capabilities.network.ca` is empty".to_string());
             }
         }
     }
@@ -545,6 +755,82 @@ mod tests {
         assert!(err.contains("repeats `main`"), "{err}");
     }
 
+    const WITH_CAPS: &str = r#"{
+        "schema": 1,
+        "profile": "trusted-native",
+        "module": {"name": "demo", "sources": ["Demo.aum"]},
+        "capabilities": {
+            "state_dir": ".state",
+            "rights": "read,list",
+            "roots": [
+                {"path": "data", "rights": "read"},
+                {"path": "cache", "rights": "read,write,create"}
+            ],
+            "quota_bytes": 4096
+        }
+    }"#;
+
+    /// U19: the document names each root's rights and the write quota, and the
+    /// parsed values are exactly what the host opens handles with.
+    #[test]
+    fn capability_rights_roots_and_quota_parse() {
+        let doc = parse(p(), WITH_CAPS).expect("right-scoped capabilities");
+        let caps = doc.capabilities.expect("capabilities block");
+        assert_eq!(
+            caps.state_rights().unwrap(),
+            FsRights::READ.union(FsRights::LIST)
+        );
+        assert_eq!(caps.quota_bytes, Some(4096));
+        let roots = caps.root_grants().unwrap();
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[1].root, "cache");
+        assert_eq!(
+            roots[1].rights,
+            FsRights::READ
+                .union(FsRights::WRITE)
+                .union(FsRights::CREATE)
+        );
+    }
+
+    #[test]
+    fn a_malformed_capability_is_named() {
+        for (document, needle) in [
+            (
+                WITH_CAPS.replace("\"rights\": \"read\"", "\"rghts\": \"read\""),
+                "capabilities.roots[0].rghts",
+            ),
+            (
+                WITH_CAPS.replace("\"path\": \"data\"", "\"path\": \"/data\""),
+                "is absolute",
+            ),
+            (
+                WITH_CAPS.replace("\"path\": \"data\"", "\"path\": \"../data\""),
+                "contains `..`",
+            ),
+            (
+                WITH_CAPS.replace(
+                    "\"rights\": \"read,write,create\"",
+                    "\"rights\": \"reed\"",
+                ),
+                "unknown filesystem right",
+            ),
+            (
+                WITH_CAPS.replace(
+                    "\"rights\": \"read,write,create\"",
+                    "\"rights\": \"\"",
+                ),
+                "names no right",
+            ),
+            (
+                WITH_CAPS.replace("\"rights\": \"read,list\"", "\"rights\": \"reed\""),
+                "`capabilities.rights`",
+            ),
+        ] {
+            let error = parse(p(), &document).expect_err("malformed capability must be refused");
+            assert!(error.contains(needle), "{error}");
+        }
+    }
+
     #[test]
     fn an_unknown_signature_field_is_named_in_place() {
         let doc = BASE.replace(
@@ -553,5 +839,92 @@ mod tests {
         );
         let err = parse(p(), &doc).expect_err("unknown signature field");
         assert!(err.contains("trusted.signatures[0].ret"), "{err}");
+    }
+
+    const WITH_NET: &str = r#"{
+        "schema": 1,
+        "profile": "trusted-native",
+        "module": {"name": "netdemo", "sources": ["Net.aum"]},
+        "capabilities": {
+            "state_dir": ".state",
+            "network": {
+                "endpoints": ["127.0.0.1:8787", "*.example.com:443"],
+                "allow_ips": ["127.0.0.0/8", "10.0.0.0/8"],
+                "ca": "ca.pem",
+                "timeout_ms": 1500
+            }
+        }
+    }"#;
+
+    /// U20: the project document names the endpoints, ranges, anchor and
+    /// deadline, and the parsed values become the instance's dial policy.
+    #[test]
+    fn a_network_capability_parses_and_builds_a_policy() {
+        let doc = parse(p(), WITH_NET).expect("network capability");
+        let caps = doc.capabilities.expect("capabilities block");
+        let net = caps.network.as_ref().expect("network block");
+        assert_eq!(net.endpoints.len(), 2);
+        assert_eq!(net.allow_ips.len(), 2);
+        assert_eq!(net.ca.as_deref(), Some(std::path::Path::new("ca.pem")));
+        assert_eq!(net.timeout_ms, Some(1500));
+
+        // The anchor is a file, so this document-level test drops it; a policy
+        // with endpoints and ranges still constructs (TLS is then refused).
+        let no_anchor = WITH_NET.replace(",\n                \"ca\": \"ca.pem\"", "");
+        let doc = parse(p(), &no_anchor).expect("network capability without anchor");
+        let caps = doc.capabilities.expect("capabilities block");
+        let policy = caps
+            .net_policy(std::path::Path::new("/nonexistent"))
+            .expect("policy constructs")
+            .expect("network block grants a policy");
+        assert_eq!(policy.endpoints().len(), 2);
+        assert!(policy.approves_endpoint("127.0.0.1", 8787));
+        assert!(policy.approves_endpoint("api.example.com", 443));
+        assert!(!policy.approves_endpoint("example.com", 443));
+        assert!(policy.approves_address("10.1.2.3".parse().unwrap()));
+        assert!(!policy.approves_address("192.0.2.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn a_malformed_network_capability_is_named_by_field() {
+        for (document, needle) in [
+            (
+                WITH_NET.replace("\"endpoints\"", "\"endpoint\""),
+                "capabilities.network.endpoint",
+            ),
+            (
+                WITH_NET.replace("\"127.0.0.1:8787\"", "\"127.0.0.1:notaport\""),
+                "capabilities.network.endpoints[0]",
+            ),
+            (
+                WITH_NET.replace("\"10.0.0.0/8\"", "\"10.0.0.0/33\""),
+                "capabilities.network.allow_ips[1]",
+            ),
+            (
+                WITH_NET.replace(
+                    "\"endpoints\": [\"127.0.0.1:8787\", \"*.example.com:443\"]",
+                    "\"endpoints\": []",
+                ),
+                "`capabilities.network.endpoints` is empty",
+            ),
+            (
+                WITH_NET.replace(
+                    "\"allow_ips\": [\"127.0.0.0/8\", \"10.0.0.0/8\"]",
+                    "\"allow_ips\": []",
+                ),
+                "`capabilities.network.allow_ips` is empty",
+            ),
+            (
+                WITH_NET.replace("\"timeout_ms\": 1500", "\"timeout_ms\": 0"),
+                "`capabilities.network.timeout_ms` is 0",
+            ),
+            (
+                WITH_NET.replace("\"ca\": \"ca.pem\"", "\"ca\": \"\""),
+                "`capabilities.network.ca` is empty",
+            ),
+        ] {
+            let error = parse(p(), &document).expect_err("malformed network capability");
+            assert!(error.contains(needle), "{error}");
+        }
     }
 }

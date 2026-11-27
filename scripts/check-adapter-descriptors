@@ -3,9 +3,11 @@
 # compiler's CPS path and diff them against the pinned golden.
 #
 # The goldens are `test-programs/adapters/adapters.golden`, produced by
-# compiling `test-programs/adapters/rs_scalars.aum`, and
+# compiling `test-programs/adapters/rs_scalars.aum`,
 # `test-programs/adapters/handles.golden`, produced by compiling the
-# `WidgetHandle` module, each with `--emit-adapters`. They are the contract
+# `WidgetHandle` module, and `either.golden`/`result.golden`, produced by
+# compiling the two checked-union fixtures in `umbrella/modules/`, each with
+# `--emit-adapters`. They are the contract
 # between the compiler (which decides *which* calls need a wrapper and what
 # their scalars are) and `umbrella/src/interface.rs` (which turns the text into
 # generated wrappers), so they are compared byte for byte: a reordered field, a
@@ -23,6 +25,10 @@ FIXTURE="$ROOT/test-programs/adapters/rs_scalars.aum"
 GOLDEN="$ROOT/test-programs/adapters/adapters.golden"
 HANDLE_FIXTURE="$ROOT/umbrella/modules/WidgetHandle.aui,$ROOT/umbrella/modules/WidgetHandle.aum"
 HANDLE_GOLDEN="$ROOT/test-programs/adapters/handles.golden"
+EITHER_FIXTURE="$ROOT/umbrella/modules/EitherImport.aum"
+EITHER_GOLDEN="$ROOT/test-programs/adapters/either.golden"
+RESULT_FIXTURE="$ROOT/umbrella/modules/ResultImport.aum"
+RESULT_GOLDEN="$ROOT/test-programs/adapters/result.golden"
 AUSTRAL="${AUSTRAL:-$ROOT/austral}"
 # A developer tree has the bridge at the repo root; a clean `make bridge` (and
 # CI) leaves it only under target/release.
@@ -30,7 +36,8 @@ BRIDGE="$ROOT/libaustral_cranelift_bridge.so"
 [ -f "$BRIDGE" ] || BRIDGE="$ROOT/safestos/cranelift/target/release/libaustral_cranelift_bridge.so"
 
 for path in "$FIXTURE" "$GOLDEN" "$HANDLE_GOLDEN" "$AUSTRAL" \
-            "${HANDLE_FIXTURE%%,*}" "${HANDLE_FIXTURE##*,}"; do
+            "${HANDLE_FIXTURE%%,*}" "${HANDLE_FIXTURE##*,}" \
+            "$EITHER_FIXTURE" "$EITHER_GOLDEN" "$RESULT_FIXTURE" "$RESULT_GOLDEN"; do
     if [ ! -e "$path" ]; then
         echo "check-adapter-descriptors: [gap] missing $path" >&2
         exit 2
@@ -60,6 +67,23 @@ if ! LD_LIBRARY_PATH="$(dirname "$BRIDGE"):$ROOT${LD_LIBRARY_PATH:+:$LD_LIBRARY_
     exit 2
 fi
 
+# The checked-union fixtures have no C rendering (the checked adapter symbol
+# has no C form), so their descriptors come from the CPS-only path, the same
+# path the live fixtures use.
+for pair in "$EITHER_FIXTURE:either" "$RESULT_FIXTURE:result"; do
+    fixture="${pair%%:*}"
+    stem="${pair##*:}"
+    if ! LD_LIBRARY_PATH="$(dirname "$BRIDGE"):$ROOT${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+         "$AUSTRAL" compile "$fixture" \
+         --use-cps-jit --emit-cps-only --allow-all --target-type=tc \
+         --emit-cps="$tmp/$stem.cps" \
+         --emit-adapters="$tmp/$stem.golden" > "$tmp/$stem.log" 2>&1; then
+        echo "check-adapter-descriptors: [gap] the $stem fixture did not compile" >&2
+        tail -5 "$tmp/$stem.log" >&2
+        exit 2
+    fi
+done
+
 status=0
 if diff -u "$GOLDEN" "$tmp/adapters.golden"; then
     echo "check-adapter-descriptors: [pass] $(grep -c '^symbol ' "$GOLDEN") descriptor(s) match the golden"
@@ -78,4 +102,17 @@ else
          "test-programs/adapters/handles.golden and review the diff" >&2
     status=1
 fi
+
+for pair in "$EITHER_GOLDEN:either" "$RESULT_GOLDEN:result"; do
+    golden="${pair%%:*}"
+    stem="${pair##*:}"
+    if diff -u "$golden" "$tmp/$stem.golden"; then
+        echo "check-adapter-descriptors: [pass] $(grep -c '^symbol ' "$golden") $stem descriptor(s) match the golden"
+    else
+        echo "check-adapter-descriptors: FAIL the emitted $stem descriptors differ from the golden" >&2
+        echo "  regenerate only if the change is intended: copy the emitted file over" \
+             "test-programs/adapters/$stem.golden and review the diff" >&2
+        status=1
+    fi
+done
 exit "$status"

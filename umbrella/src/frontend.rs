@@ -131,6 +131,10 @@ pub fn compile(
     }
     cmd.arg("--use-cps-jit")
         .arg("--emit-cps-only")
+        // U17: one artifact holding every module of this source list. Without
+        // it each module's lowering truncates the path, so only the last
+        // module's functions would survive.
+        .arg("--emit-cps-bundle")
         .arg("--target-type=tc")
         .arg(format!("--emit-cps={}", cps_path.display()))
         .arg(format!("--emit-adapters={}", adapters_path.display()));
@@ -368,6 +372,236 @@ fn parse_exports(stderr: &str) -> Result<Vec<Export>, String> {
     Ok(exports.into_values().collect())
 }
 
+/// What a module source declares for ordering: its module name and the module
+/// names it imports. Only `module`/`module body` and `import` declaration
+/// lines are read, so an interface/body pair contributes both files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleSource {
+    pub path: PathBuf,
+    pub name: Option<String>,
+    pub imports: Vec<String>,
+}
+
+/// A declaration's first token: the module or import name, up to whitespace, an
+/// argument list or the terminating `;`.
+fn declaration_name(rest: &str) -> String {
+    rest.split(|c: char| c.is_whitespace() || c == '(' || c == ';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+/// Read the module names and imports of every source in `modules`. A path may
+/// be one file or an `interface,body` pair, exactly as the compiler takes them.
+pub fn read_module_sources(modules: &[PathBuf]) -> Result<Vec<ModuleSource>, String> {
+    let mut sources = Vec::new();
+    for module in modules {
+        let mut name = None;
+        let mut imports = Vec::new();
+        let mut first_path = None;
+        for part in module.to_string_lossy().split(',') {
+            let path = PathBuf::from(part);
+            if first_path.is_none() {
+                first_path = Some(path.clone());
+            }
+            let text = match fs::read_to_string(&path) {
+                Ok(text) => text,
+                // A source that does not exist is the compiler's error to
+                // report; the ordering check has nothing to say about it.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(format!("read module {}: {e}", path.display())),
+            };
+            for line in text.lines() {
+                // Declarations sit at the top level; a `--` comment can follow.
+                let line = line.split("--").next().unwrap_or("").trim();
+                if let Some(rest) = line.strip_prefix("module body ") {
+                    name = Some(declaration_name(rest));
+                } else if let Some(rest) = line.strip_prefix("module ") {
+                    name = Some(declaration_name(rest));
+                } else if let Some(rest) = line.strip_prefix("import ") {
+                    let imported = declaration_name(rest);
+                    if !imported.is_empty() && !imports.contains(&imported) {
+                        imports.push(imported);
+                    }
+                }
+            }
+        }
+        sources.push(ModuleSource {
+            path: first_path.unwrap_or_else(|| module.clone()),
+            name,
+            imports,
+        });
+    }
+    Ok(sources)
+}
+
+/// The first import chain that closes a cycle, as module names in order with
+/// the repeated name at the end (`A`, `B`, `A`). Only edges between listed
+/// modules are followed; an import the list does not name cannot close a cycle
+/// inside the list. `start`'s own position is the DFS root, so a cycle is
+/// reported once, from the earliest module that reaches it.
+fn import_cycle(
+    sources: &[ModuleSource],
+    positions: &BTreeMap<&str, usize>,
+) -> Option<Vec<String>> {
+    fn walk(
+        sources: &[ModuleSource],
+        positions: &BTreeMap<&str, usize>,
+        index: usize,
+        path: &mut Vec<String>,
+        on_path: &mut Vec<bool>,
+        visited: &mut Vec<bool>,
+    ) -> Option<Vec<String>> {
+        path.push(sources[index].name.clone().unwrap_or_default());
+        on_path[index] = true;
+        for import in &sources[index].imports {
+            let Some(&next) = positions.get(import.as_str()) else {
+                continue;
+            };
+            if on_path[next] {
+                let from = path.iter().position(|name| name == import).unwrap_or(0);
+                let mut cycle: Vec<String> = path[from..].to_vec();
+                cycle.push(import.clone());
+                return Some(cycle);
+            }
+            if visited[next] {
+                continue;
+            }
+            if let Some(cycle) = walk(sources, positions, next, path, on_path, visited) {
+                return Some(cycle);
+            }
+        }
+        path.pop();
+        on_path[index] = false;
+        visited[index] = true;
+        None
+    }
+
+    let mut visited = vec![false; sources.len()];
+    let mut on_path = vec![false; sources.len()];
+    for (index, source) in sources.iter().enumerate() {
+        if source.name.is_none() || visited[index] {
+            continue;
+        }
+        let mut path = Vec::new();
+        if let Some(cycle) = walk(sources, positions, index, &mut path, &mut on_path, &mut visited)
+        {
+            return Some(cycle);
+        }
+    }
+    None
+}
+
+/// Refuse a module list that no ordering can satisfy: the same module name
+/// declared twice (the second definition would shadow the first in the JIT's
+/// flat function table), a module that imports itself, and an import cycle
+/// among listed modules. The order of the list itself is *not* an error —
+/// `dependency_order` derives the build order from the declared imports. An
+/// import of a module that is not in the list (built-ins, Rust providers) is
+/// left to the compiler.
+pub fn check_dependency_order(sources: &[ModuleSource]) -> Result<(), String> {
+    let mut positions: BTreeMap<&str, usize> = BTreeMap::new();
+    for (index, source) in sources.iter().enumerate() {
+        let Some(name) = &source.name else {
+            continue;
+        };
+        if let Some(&first) = positions.get(name.as_str()) {
+            return Err(format!(
+                "module `{name}` is declared twice: {}, position {}, and {}, position {}; a \
+                 module list names each module once, because the second definition would \
+                 enter the JIT's flat function table beside the first",
+                sources[first].path.display(),
+                first + 1,
+                source.path.display(),
+                index + 1
+            ));
+        }
+        positions.insert(name.as_str(), index);
+    }
+    for source in sources {
+        let Some(name) = &source.name else {
+            continue;
+        };
+        if source.imports.iter().any(|import| import == name) {
+            return Err(format!(
+                "module `{name}` ({}) imports itself; no build order can satisfy that",
+                source.path.display()
+            ));
+        }
+    }
+    if let Some(cycle) = import_cycle(sources, &positions) {
+        let path = cycle
+            .iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(" -> ");
+        return Err(format!(
+            "the module list has an import cycle ({path}); no dependency order exists for \
+             it, so pass a list without one"
+        ));
+    }
+    Ok(())
+}
+
+/// The build order of a source list, as positions into `sources`: every module
+/// after the listed modules it imports. `check_dependency_order` runs first, so
+/// a duplicate name, a self-import or a cycle has already been refused; the
+/// sort is stable, so modules with no ordering constraint between them keep the
+/// order the caller gave. A module with no readable name (a missing source, the
+/// compiler's own error to report) never constrains anything.
+///
+/// The last module in the result is what the bundled artifact is named after,
+/// and a client is never imported by its dependencies, so a client listed first
+/// still ends up last.
+pub fn dependency_order(sources: &[ModuleSource]) -> Result<Vec<usize>, String> {
+    let mut positions: BTreeMap<&str, usize> = BTreeMap::new();
+    for (index, source) in sources.iter().enumerate() {
+        if let Some(name) = &source.name {
+            positions.insert(name.as_str(), index);
+        }
+    }
+    // In-degree over edges `import -> importer`; only listed modules count.
+    let mut indegree = vec![0usize; sources.len()];
+    let mut importers: Vec<Vec<usize>> = vec![Vec::new(); sources.len()];
+    for (index, source) in sources.iter().enumerate() {
+        for import in &source.imports {
+            let Some(&dependency) = positions.get(import.as_str()) else {
+                continue;
+            };
+            indegree[index] += 1;
+            importers[dependency].push(index);
+        }
+    }
+    let mut order = Vec::with_capacity(sources.len());
+    let mut placed = vec![false; sources.len()];
+    while order.len() < sources.len() {
+        // The earliest unplaced module whose dependencies are all placed. Ties
+        // go to the caller's order, which is what makes the sort stable.
+        let Some(next) = (0..sources.len())
+            .find(|&i| !placed[i] && indegree[i] == 0)
+        else {
+            // check_dependency_order refuses cycles, so this is a programming
+            // error rather than a source error; name it rather than loop.
+            let stuck: Vec<String> = (0..sources.len())
+                .filter(|&i| !placed[i])
+                .map(|i| sources[i].name.clone().unwrap_or_default())
+                .collect();
+            return Err(format!(
+                "no dependency order exists for the remaining modules ({}); this \
+                 module list has a cycle check_dependency_order should have refused",
+                stuck.join(", ")
+            ));
+        };
+        placed[next] = true;
+        order.push(next);
+        for &importer in &importers[next] {
+            indegree[importer] -= 1;
+        }
+    }
+    Ok(order)
+}
+
 fn parse_module_names(stderr: &str) -> Vec<String> {
     stderr
         .lines()
@@ -445,6 +679,131 @@ mod tests {
         )
     }
 
+    fn source(name: &str, imports: &[&str]) -> ModuleSource {
+        ModuleSource {
+            path: PathBuf::from(format!("{name}.aum")),
+            name: Some(name.to_string()),
+            imports: imports.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_missing_source_is_left_to_the_compiler() {
+        let sources = read_module_sources(&[PathBuf::from("/nonexistent/M.aum")])
+            .expect("a missing source is not an ordering error");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].name, None);
+        assert!(sources[0].imports.is_empty());
+        assert_eq!(check_dependency_order(&sources), Ok(()));
+    }
+
+    #[test]
+    fn a_dependency_ordered_list_is_accepted() {
+        let sources = [source("Producer", &[]), source("Consumer", &["Producer"])];
+        assert_eq!(check_dependency_order(&sources), Ok(()));
+    }
+
+    #[test]
+    fn a_dependency_listed_later_is_compiled_before_its_importer() {
+        let sources = [source("Consumer", &["Producer"]), source("Producer", &[])];
+        assert_eq!(check_dependency_order(&sources), Ok(()));
+        assert_eq!(dependency_order(&sources), Ok(vec![1, 0]));
+    }
+
+    #[test]
+    fn independent_modules_keep_the_order_they_were_given_in() {
+        let sources = [source("B", &[]), source("A", &[]), source("C", &[])];
+        assert_eq!(dependency_order(&sources), Ok(vec![0, 1, 2]));
+    }
+
+    #[test]
+    fn a_deep_chain_is_ordered_from_its_leaf_and_a_client_stays_last() {
+        // Listed client-first and in the middle of its own dependencies.
+        let sources = [
+            source("Client", &["Lib2"]),
+            source("Lib2", &["Lib1"]),
+            source("Lib1", &[]),
+        ];
+        assert_eq!(dependency_order(&sources), Ok(vec![2, 1, 0]));
+    }
+
+    #[test]
+    fn an_import_of_a_module_outside_the_list_is_left_to_the_compiler() {
+        let sources = [source("Consumer", &["Austral.Memory", "Provider"])];
+        assert_eq!(check_dependency_order(&sources), Ok(()));
+    }
+
+    #[test]
+    fn a_module_that_imports_itself_is_refused() {
+        let sources = [source("Loop", &["Loop"])];
+        let error = check_dependency_order(&sources).expect_err("self import");
+        assert!(error.contains("imports itself"), "{error}");
+    }
+
+    #[test]
+    fn a_module_name_declared_twice_is_refused() {
+        let sources = [source("Dup", &[]), source("Other", &[]), source("Dup", &[])];
+        let error = check_dependency_order(&sources).expect_err("duplicate name");
+        assert_eq!(
+            error,
+            "module `Dup` is declared twice: Dup.aum, position 1, and Dup.aum, position 3; a \
+             module list names each module once, because the second definition would enter \
+             the JIT's flat function table beside the first"
+        );
+    }
+
+    #[test]
+    fn an_import_cycle_is_refused_even_when_it_is_not_self_import() {
+        // Positions are legal in isolation (Each import points at a listed
+        // module) but no dependency order exists: A imports B imports A.
+        let sources = [
+            source("A", &["B"]),
+            source("B", &["A"]),
+            source("C", &["A"]),
+        ];
+        let error = check_dependency_order(&sources).expect_err("cycle");
+        assert_eq!(
+            error,
+            "the module list has an import cycle (`A` -> `B` -> `A`); no dependency order \
+             exists for it, so pass a list without one"
+        );
+    }
+
+    #[test]
+    fn an_import_cycle_through_a_third_module_is_named_in_full() {
+        let sources = [
+            source("A", &["B"]),
+            source("B", &["C"]),
+            source("C", &["A"]),
+        ];
+        let error = check_dependency_order(&sources).expect_err("cycle");
+        assert!(error.contains("(`A` -> `B` -> `C` -> `A`)"), "{error}");
+    }
+
+    #[test]
+    fn the_declared_names_and_imports_are_read_from_interface_and_body() {
+        let staging = Staging::create("deps").unwrap();
+        let interface = staging.fresh_path("Producer.aui").unwrap();
+        let body = staging.fresh_path("Producer.aum").unwrap();
+        fs::write(&interface, "module Producer is\n    function a(): Int64;\nend module.\n")
+            .unwrap();
+        fs::write(
+            &body,
+            "-- import NotARealOne (X);\nmodule body Producer is\n    import Dep (Y);\nend module body.\n",
+        )
+        .unwrap();
+        let modules = vec![PathBuf::from(format!(
+            "{},{}",
+            interface.display(),
+            body.display()
+        ))];
+        let sources = read_module_sources(&modules).expect("read sources");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].name.as_deref(), Some("Producer"));
+        assert_eq!(sources[0].imports, vec!["Dep".to_string()]);
+        assert_eq!(sources[0].path, interface);
+    }
+
     #[test]
     fn a_complete_artifact_is_accepted_without_the_advisory_or_allow_all() {
         let f = Fixture::new(&emit_ok_body(4, 1, 4));
@@ -463,6 +822,7 @@ mod tests {
         );
         let args = f.args();
         assert!(args.contains("--emit-cps-only"), "{args}");
+        assert!(args.contains("--emit-cps-bundle"), "{args}");
         assert!(!args.contains("--allow-all"), "{args}");
         let env = f.env();
         assert!(env.contains("advisory=unset"), "{env}");

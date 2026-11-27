@@ -28,6 +28,7 @@ pub mod handles;
 pub mod isa;
 pub mod liquid_attest;
 pub mod module;
+pub mod netstd_mod;
 #[cfg(feature = "cedar")]
 pub mod policy;
 #[cfg(feature = "sandbox")]
@@ -1088,9 +1089,9 @@ pub(crate) const RS_FFI_SYMBOLS: &[KernelSymbol] = &[
         name: "rs_bundle_tag",
         addr: rsffi::rs_bundle_tag as *const u8,
     },
-    // D09: the capability boundary. The host issues handles; these five verbs
-    // are the only way a module reaches the instance state directory or its one
-    // configured peer, and each is gated by name like any other `rs_*` call.
+    // D09/U19: the capability boundary. The host issues handles; these verbs
+    // are the only way a module reaches an approved root or its one configured
+    // peer, and each is gated by name like any other `rs_*` call.
     KernelSymbol {
         name: "rs_cap_dir_open",
         addr: crate::capstd_mod::rs_cap_dir_open as *const u8,
@@ -1122,6 +1123,52 @@ pub(crate) const RS_FFI_SYMBOLS: &[KernelSymbol] = &[
     KernelSymbol {
         name: "rs_cap_cancel",
         addr: crate::capstd_mod::rs_cap_cancel as *const u8,
+    },
+    // U19: the right-scoped filesystem verbs. `open_root` names an approved
+    // root by index (never a path); `list`/`delete`/`rename` each need the
+    // right of the same name on the handle; `revoke` withdraws a handle.
+    KernelSymbol {
+        name: "rs_cap_open_root",
+        addr: crate::capstd_mod::rs_cap_open_root as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_cap_list",
+        addr: crate::capstd_mod::rs_cap_list as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_cap_delete",
+        addr: crate::capstd_mod::rs_cap_delete as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_cap_rename",
+        addr: crate::capstd_mod::rs_cap_rename as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_cap_revoke",
+        addr: crate::capstd_mod::rs_cap_revoke as *const u8,
+    },
+    // U20: bounded network capabilities. A module dials through a `Net` handle
+    // and the host's policy; it never receives a socket, a name or an address
+    // it can reuse under a different authority.
+    KernelSymbol {
+        name: "rs_cap_net_dial",
+        addr: crate::capstd_mod::rs_cap_net_dial as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_cap_net_read",
+        addr: crate::capstd_mod::rs_cap_net_read as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_cap_net_write",
+        addr: crate::capstd_mod::rs_cap_net_write as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_cap_net_shutdown",
+        addr: crate::capstd_mod::rs_cap_net_shutdown as *const u8,
+    },
+    KernelSymbol {
+        name: "rs_cap_net_unsupported",
+        addr: crate::capstd_mod::rs_cap_net_unsupported as *const u8,
     },
 ];
 

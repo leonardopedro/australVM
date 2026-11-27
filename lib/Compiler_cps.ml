@@ -158,25 +158,80 @@ let checked_option_adapters = Hashtbl.create 4
    union and drops the entry, so one linear value has one release. *)
 let checked_owned_locals : (string, string) Hashtbl.t = Hashtbl.create 4
 
-(* The `<symbol>__free` export a checked adapter's result must be released
-   with, when `expr` is a call to that adapter. *)
-let checked_call_free (expr: Mt.mexpr): string option =
-  match expr with
-  | Mt.MConcreteFuncall (decl_id, _, _, _) ->
-      Option.map (fun co -> co.co_free_symbol)
-        (Hashtbl.find_opt checked_option_adapters decl_id)
-  | _ -> None
+(* U15c: a checked union passed as an argument leaves the caller's table: the
+   callee's parameter owns it, and a `match` on that parameter in the callee
+   releases it. Keyed by the callee the lowering emits (`d<decl>`/`m<mono>`),
+   each entry is `(parameter index, free symbol)`. *)
+let checked_owned_fn_params : (string, (int * string) list) Hashtbl.t =
+  Hashtbl.create 8
 
-(* Record whether `name` now owns a checked-adapter union; any other value
-   clears a previous ownership so a rebound name is never released twice. *)
-let register_checked_owned (name: string) (src: Mt.mexpr): unit =
-  match checked_call_free src with
-  | Some free -> Hashtbl.replace checked_owned_locals name free
-  | None -> Hashtbl.remove checked_owned_locals name
+(* A parameter two call sites transfer different providers' unions into has no
+   single release symbol. Mark it so neither site records a transfer (the
+   caller keeps the value, so a later `match` can still release it) instead of
+   oscillating the transfer fixpoint between the two symbols. *)
+let checked_param_conflicts : (string, int list) Hashtbl.t = Hashtbl.create 4
 
-(* The release a `match` must emit for its scrutinee, and the local to forget
-   when the value came through a variable. *)
-let rec checked_scrutinee_free (expr: Mt.mexpr): (string * string option) option =
+let parameter_transfer_conflicted (key: string) (index: int): bool =
+  match Hashtbl.find_opt checked_param_conflicts key with
+  | Some indices -> List.mem index indices
+  | None -> false
+
+(* Set when a conversion pass discovered a transfer it had not recorded, so
+   `compile_module_cps` converts once more: a parameter that only becomes an
+   owner in this pass can pass the value on again. *)
+let checked_transfers_changed = ref false
+
+let callee_decl_key (id: decl_id): string = "d" ^ show_decl_id id
+let callee_mono_key (id: mono_id): string = "m" ^ show_mono_id id
+
+(* The callees whose bodies this compilation emits. A transfer into one of
+   them is recorded for its parameter (the callee's `match` releases the
+   union); a call to any other callee — an import from another module, whose
+   body a different front-end run lowered — is released by the *caller* after
+   the call returns, because only the caller holds the `<symbol>__free` its
+   allocation needs. Reset at the start of every `compile_module_cps`. *)
+let emitted_callee_keys : (string, unit) Hashtbl.t = Hashtbl.create 16
+
+(* Names for the argument/result bindings a caller-side release introduces.
+   Reset per module so the artifact is byte-stable across runs. *)
+let xfer_counter = ref 0
+
+(* Set while converting the call a {!caller_release_setup} hoisted, so the
+   expression path does not insist on (or perform) the release itself. *)
+let xfer_hoisting = ref false
+
+
+
+
+let fresh_xfer_name (what: string): string =
+  let n = !xfer_counter in
+  incr xfer_counter;
+  Printf.sprintf "__xfer_%s%d" what n
+
+(* A concrete instance method is emitted once, under the instance-method id,
+   and every `MConcreteMethodCall` names it by that id. Keying transfers the
+   same way is what lets the method's own `match` release a checked union its
+   caller passed in, the same argument `callee_decl_key` covers. *)
+let callee_meth_key (id: ins_meth_id): string = "i" ^ show_ins_meth_id id
+
+let concrete_method_symbol (id: ins_meth_id): string =
+  "concrete_method_" ^ show_ins_meth_id id
+
+(* The concrete methods this module declares. Their bodies are emitted under
+   {!concrete_method_symbol}, so their call sites must use that name. Every
+   other concrete method (an imported instance, or a Pervasive intrinsic the
+   bridge registers under its qualified name) keeps the name the lowering used
+   before: the id form would not resolve. *)
+let local_concrete_methods : (ins_meth_id, unit) Hashtbl.t = Hashtbl.create 8
+
+let concrete_method_call_name (id: ins_meth_id) (q: qident): string =
+  if Hashtbl.mem local_concrete_methods id then concrete_method_symbol id
+  else qident_to_string q
+
+(* The release an expression's value must be given with, and the local that
+   owns it when the value is named. A cast is the same value (the CPS lowering
+   drops casts), so it is looked through. *)
+let rec checked_value_free (expr: Mt.mexpr): (string * string option) option =
   match expr with
   | Mt.MConcreteFuncall (decl_id, _, _, _) ->
       Option.map (fun co -> (co.co_free_symbol, None))
@@ -185,8 +240,27 @@ let rec checked_scrutinee_free (expr: Mt.mexpr): (string * string option) option
       let name = ident_string id in
       Option.map (fun free -> (free, Some name))
         (Hashtbl.find_opt checked_owned_locals name)
-  | Mt.MCast (e, _) | Mt.MTypecast (e, _) -> checked_scrutinee_free e
+  | Mt.MCast (e, _) | Mt.MTypecast (e, _) -> checked_value_free e
   | _ -> None
+
+(* Record whether `name` now owns a checked-adapter union. Ownership moves: a
+   copy of an owned variable (`let t = value`, the monomorphizer's hoisted
+   scrutinee) makes `t` the owner and drops the source, so one linear value is
+   released once. Any other value clears a previous ownership, so a rebound
+   name is never released twice. *)
+let register_checked_owned (name: string) (src: Mt.mexpr): unit =
+  match checked_value_free src with
+  | Some (free, owner) ->
+    (match owner with
+     | Some owner when owner <> name -> Hashtbl.remove checked_owned_locals owner
+     | _ -> ());
+    Hashtbl.replace checked_owned_locals name free
+  | None -> Hashtbl.remove checked_owned_locals name
+
+(* The release a `match` must emit for its scrutinee, and the local to forget
+   when the value came through a variable. *)
+let checked_scrutinee_free (expr: Mt.mexpr): (string * string option) option =
+  checked_value_free expr
 
 let required_adapters : (string, adapter_requirement) Hashtbl.t = Hashtbl.create 8
 
@@ -662,6 +736,73 @@ let rec get_expr_type (expr: Mt.mexpr): mono_ty =
   | Mt.MArrayIndex (e, _, _) -> (match get_expr_type e with MonoPointer ty | MonoAddress ty | MonoSpan (ty, _) | MonoSpanMut (ty, _) -> ty | _ -> MonoUnit)
   | Mt.MSpanIndex (e, _, _) -> (match get_expr_type e with MonoPointer ty | MonoAddress ty | MonoSpan (ty, _) | MonoSpanMut (ty, _) -> ty | _ -> MonoUnit)
 
+(* U15c: when an argument of union type is a checked adapter's result (or a
+   local that owns one), ownership moves to the callee's parameter. Record the
+   transfer so the callee's `match` releases the union, and forget the
+   caller's local: one linear value is released once. A borrowed value has a
+   reference type and a copied word owns nothing, so neither is transferred. *)
+(* A call whose transfer must be released by this compilation: a non-foreign
+   callee whose body is not emitted here, with a checked-union argument and a
+   non-union result. *)
+let caller_release_needed (args: Mt.mexpr list) (ret: mono_ty): bool =
+  (match ret with MonoNamedType _ -> false | _ -> true)
+  && List.exists
+       (fun arg ->
+         match get_expr_type arg, checked_value_free arg with
+         | MonoNamedType _, Some _ -> true
+         | _ -> false)
+       args
+
+let refuse_unsequenced_release (): unit =
+  Error.austral_raise Error.GenericError [
+    ErrorText.Text
+      "A checked union is passed to a function whose body this compilation does \
+       not emit, so the caller must release it after the call returns. This call \
+       is inside an expression that cannot sequence the release; bind it to a \
+       local first (`let r = f(value);`) or use it as a statement (return, \
+       discard, assignment).";
+    ErrorText.Break;
+    ErrorText.Text "No CPS artifact was written for this module." ]
+
+let note_checked_argument_transfer (key: string) (args: Mt.mexpr list): unit =
+  List.iteri
+    (fun index arg ->
+      match get_expr_type arg with
+      | MonoNamedType _ ->
+        let transferred = checked_value_free arg in
+        (match transferred with
+         | None -> ()
+         | Some (free, local) ->
+           if not (parameter_transfer_conflicted key index) then begin
+             let entries =
+               match Hashtbl.find_opt checked_owned_fn_params key with
+               | Some entries -> entries
+               | None -> []
+             in
+             (match List.assoc_opt index entries with
+              | Some existing when existing = free -> ()
+              | Some _ ->
+                (* Two providers, one parameter: keep only the caller's
+                   ownership. *)
+                Hashtbl.replace checked_param_conflicts key
+                  (index ::
+                   match Hashtbl.find_opt checked_param_conflicts key with
+                   | Some indices -> indices
+                   | None -> []);
+                Hashtbl.replace checked_owned_fn_params key
+                  (List.remove_assoc index entries);
+                checked_transfers_changed := true
+              | None ->
+                Hashtbl.replace checked_owned_fn_params key
+                  ((index, free) :: entries);
+                checked_transfers_changed := true);
+             (match local with
+              | Some name -> Hashtbl.remove checked_owned_locals name
+              | None -> ())
+           end)
+      | _ -> ())
+    args
+
 (** `a - b` / `a * b` reach us as calls to the Pervasive trapping methods
     (TypeCheckExpr.augment_arithmetic), and the JIT has had `sub`/`mul` opcodes
     all along — unused, because a call was simpler. Emit the instruction now so
@@ -862,12 +1003,17 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
       else if Hashtbl.mem foreign_functions_by_name (ident_string (original_name q)) then
         App (Hashtbl.find foreign_functions_by_name (ident_string (original_name q)),
              narrow_args_for decl_id args)
-      else
+      else begin
         (* Non-foreign call, possibly cross-module (e.g. a module calling
            UnferKernel::wrapModel). Functions are emitted under their *unqualified*
            name (build_cps_function uses `ident_string name`) into a flat JIT
            function table, so the call must use the unqualified name too. The
            qualified debug name ("UnferKernel::wrapModel") would not resolve. *)
+        let key = callee_decl_key decl_id in
+        if Hashtbl.mem emitted_callee_keys key then
+          note_checked_argument_transfer key args
+        else if (not !xfer_hoisting) && caller_release_needed args ty then
+          refuse_unsequenced_release ();
         (match args with
          | [a; b] ->
              let ca = convert_expr a and cb = convert_expr b in
@@ -879,7 +1025,13 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
                  | Some `Mul -> Mul (ca, cb)
                  | None -> App (ident_string (original_name q), [ca; cb])))
          | _ -> App (ident_string (original_name q), List.map convert_expr args))
-  | Mt.MGenericFuncall (id, args, _) ->
+      end
+  | Mt.MGenericFuncall (id, args, ty) ->
+      let key = callee_mono_key id in
+      if Hashtbl.mem emitted_callee_keys key then
+        note_checked_argument_transfer key args
+      else if (not !xfer_hoisting) && caller_release_needed args ty then
+        refuse_unsequenced_release ();
       let args =
         match Hashtbl.find_opt monomorph_params id with
         | Some tys when List.length tys = List.length args ->
@@ -887,7 +1039,12 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
         | _ -> List.map convert_expr args
       in
       App ("monomorph_" ^ show_mono_id id, args)
-  | Mt.MConcreteMethodCall (_, q, args, ty) ->
+  | Mt.MConcreteMethodCall (id, q, args, ty) ->
+      let key = callee_meth_key id in
+      if Hashtbl.mem emitted_callee_keys key then
+        note_checked_argument_transfer key args
+      else if (not !xfer_hoisting) && caller_release_needed args ty then
+        refuse_unsequenced_release ();
       (match args with
        | [a; b] ->
            let ca = convert_expr a and cb = convert_expr b in
@@ -897,9 +1054,14 @@ let rec convert_expr (expr: Mt.mexpr): CpsGen.cps_expr =
               (match trapping_arith_op q with
                | Some `Sub -> Sub (ca, cb)
                | Some `Mul -> Mul (ca, cb)
-               | None -> App (qident_to_string q, [ca; cb])))
-       | _ -> App (qident_to_string q, List.map convert_expr args))
-  | Mt.MGenericMethodCall (_, id, args, _) ->
+               | None -> App (concrete_method_call_name id q, [ca; cb])))
+       | _ -> App (concrete_method_call_name id q, List.map convert_expr args))
+  | Mt.MGenericMethodCall (_, id, args, ty) ->
+      let key = callee_mono_key id in
+      if Hashtbl.mem emitted_callee_keys key then
+        note_checked_argument_transfer key args
+      else if (not !xfer_hoisting) && caller_release_needed args ty then
+        refuse_unsequenced_release ();
       App ("method_" ^ show_mono_id id, List.map convert_expr args)
   | Mt.MFptrCall (id, args, _) ->
       App (ident_string id, List.map convert_expr args)
@@ -1020,9 +1182,154 @@ and narrow_float_literal (ty: mono_ty) (expr: Mt.mexpr): CpsGen.cps_expr =
   | MonoSingleFloat, Some f -> FloatLit32 f
   | _ -> convert_expr expr
 
+(* U15c cross-module release. A checked union passed by value to a callee whose
+   body this compilation does not emit is released by the caller once the call
+   returns: the allocation belongs to the caller's provider, whose
+   `<symbol>__free` only the caller can name. The callee, lowered in its own
+   front-end run, has no transfer record and emits no release, so exactly one
+   side frees. A call whose declared result is a union may hand the value back
+   (the callee could return the pointer it was given), so the caller keeps
+   ownership there and a later `match` releases it.
+
+   The CPS IR has no expression-level sequencing, so the release is hoisted at
+   the statement boundary: the transferred argument and the call are bound to
+   temporaries, the call's release follows them, and the statement reads the
+   result temporary. `xfer_hoisting` marks the conversion of that call so the
+   expression path does not try to release it a second time. *)
+
+(* The parts of a call expression a caller-side release needs, and how to
+   rebuild it with substituted arguments. *)
+type call_shape = {
+  cs_key: string;
+  cs_args: Mt.mexpr list;
+  cs_ret: mono_ty;
+  cs_rebuild: Mt.mexpr list -> Mt.mexpr;
+}
+
 (******************************************************************************)
 (* MAST → CPS STATEMENT CONVERSION *)
 (******************************************************************************)
+
+(* The call a caller-side release can act on, if `expr` (through casts) is one.
+   A foreign import is not: its adapter wrapper owns the value, and a checked
+   adapter call *produces* the union rather than consuming one. *)
+let rec call_shape (expr: Mt.mexpr): call_shape option =
+  match expr with
+  | Mt.MCast (e, _) | Mt.MTypecast (e, _) -> call_shape e
+  | Mt.MConcreteFuncall (decl_id, q, args, ty) ->
+      let name = qident_to_string q in
+      let is_exit_success =
+        ends_with name ":ExitSuccess" || ends_with name ".ExitSuccess"
+        || name = "ExitSuccess"
+      in
+      if is_exit_success
+         || Hashtbl.mem checked_option_adapters decl_id
+         || Hashtbl.mem foreign_functions decl_id
+         || Hashtbl.mem foreign_functions_by_name (ident_string (original_name q))
+      then None
+      else
+        Some {
+          cs_key = callee_decl_key decl_id;
+          cs_args = args;
+          cs_ret = ty;
+          cs_rebuild = (fun args -> Mt.MConcreteFuncall (decl_id, q, args, ty));
+        }
+  | Mt.MGenericFuncall (id, args, ty) ->
+      Some {
+        cs_key = callee_mono_key id;
+        cs_args = args;
+        cs_ret = ty;
+        cs_rebuild = (fun args -> Mt.MGenericFuncall (id, args, ty));
+      }
+  | Mt.MConcreteMethodCall (id, q, args, ty) ->
+      Some {
+        cs_key = callee_meth_key id;
+        cs_args = args;
+        cs_ret = ty;
+        cs_rebuild = (fun args -> Mt.MConcreteMethodCall (id, q, args, ty));
+      }
+  | Mt.MGenericMethodCall (a, id, args, ty) ->
+      Some {
+        cs_key = callee_mono_key id;
+        cs_args = args;
+        cs_ret = ty;
+        cs_rebuild = (fun args -> Mt.MGenericMethodCall (a, id, args, ty));
+      }
+  | _ -> None
+
+(* The statements a caller-side release needs, and the temporary naming the
+   call's result. `None` means no release is due: the callee's body is emitted
+   here (its own `match` releases), the call returns a union (ownership may
+   pass through), or no argument owns a checked union. *)
+let caller_release_setup (expr: Mt.mexpr): (CpsGen.cps_stmt * string) option =
+  match call_shape expr with
+  | None -> None
+  | Some cs ->
+    if Hashtbl.mem emitted_callee_keys cs.cs_key
+       || (match cs.cs_ret with MonoNamedType _ -> true | _ -> false)
+    then None
+    else
+      let transfers =
+        List.filter_map
+          (fun (index, arg) ->
+            match get_expr_type arg, checked_value_free arg with
+            | MonoNamedType _, Some (free, local) -> Some (index, free, local)
+            | _ -> None)
+          (List.mapi (fun index arg -> (index, arg)) cs.cs_args)
+      in
+      if transfers = [] then None
+      else begin
+        let bound =
+          List.map
+            (fun (index, free, local) ->
+              (index, fresh_xfer_name "arg", free, local))
+            transfers
+        in
+        let substituted =
+          List.mapi
+            (fun index arg ->
+              match List.find_opt (fun (i, _, _, _) -> i = index) bound with
+              | Some (_, name, _, _) ->
+                  Mt.MLocalVar (make_ident name, get_expr_type arg)
+              | None -> arg)
+            cs.cs_args
+        in
+        (* Ownership leaves the caller's table here: the value is released by
+           this setup, so a later `match` on the same name must not free it
+           again. *)
+        List.iter
+          (fun (_, _, _, local) ->
+            match local with
+            | Some name -> Hashtbl.remove checked_owned_locals name
+            | None -> ())
+          bound;
+        let ret_name = fresh_xfer_name "ret" in
+        let call_expr =
+          xfer_hoisting := true;
+          let converted =
+            try convert_expr (cs.cs_rebuild substituted)
+            with exn -> xfer_hoisting := false; raise exn
+          in
+          xfer_hoisting := false;
+          converted
+        in
+        let releases =
+          List.fold_right
+            (fun (_, name, free, _) acc ->
+              Block (Discard (App (free, [Var name])), acc))
+            bound Skip
+        in
+        let call =
+          List.fold_right
+            (fun (index, name, _, _) acc ->
+              let arg = List.nth cs.cs_args index in
+              Block (Let (name, convert_expr arg, Skip), acc))
+            bound
+            (Block (Let (ret_name, call_expr, Skip),
+              Block (releases, Skip)))
+        in
+        Some (call, ret_name)
+      end
 
 let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
   match stmt with
@@ -1072,11 +1379,19 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
       (* Use the unqualified name: MLet declares the local under `ident_string id`,
          but the qualified debug name (e.g. "T1::x") would assign a *different*
          JIT variable, leaving the declared one at its zero-init. *)
-      register_checked_owned (ident_string (original_name q)) src;
-      Assign (ident_string (original_name q), narrow_float_literal (local_type q) src)
+      (match caller_release_setup src with
+       | Some (setup, ret_name) ->
+           Block (setup, Assign (ident_string (original_name q), Var ret_name))
+       | None ->
+           register_checked_owned (ident_string (original_name q)) src;
+           Assign (ident_string (original_name q), narrow_float_literal (local_type q) src))
   | Mt.MInitialAssign (q, src) ->
-      register_checked_owned (ident_string (original_name q)) src;
-      Assign (ident_string (original_name q), narrow_float_literal (local_type q) src)
+      (match caller_release_setup src with
+       | Some (setup, ret_name) ->
+           Block (setup, Assign (ident_string (original_name q), Var ret_name))
+       | None ->
+           register_checked_owned (ident_string (original_name q)) src;
+           Assign (ident_string (original_name q), narrow_float_literal (local_type q) src))
   | Mt.MIf (cond, then_stmt, else_stmt) ->
       If (convert_expr cond, convert_stmt then_stmt, convert_stmt else_stmt)
   | Mt.MCase (expr, whens, _) ->
@@ -1122,8 +1437,9 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
          that was freed. The transport admits scalar payloads, so a copied word
          owns nothing and needs no release of its own. A result bound to a
          local is covered through `checked_owned_locals`, which follows the
-         name to this match; a rebinding clears the record (a leak at worst,
-         never a second free). *)
+         name to this match, and a parameter a call transferred the union into
+         is registered the same way; a rebinding clears the record (a leak at
+         worst, never a second free). *)
       let checked_free, owned_local = match checked_scrutinee_free expr with
         | Some (free, owned) -> (Some free, owned)
         | None -> (None, None)
@@ -1151,12 +1467,18 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
            List.init max_bindings (fun j ->
                Let ("__match_slot" ^ string_of_int j, slot j, Skip))
          in
-         let body =
-           Block (dispatch (fun j -> Var ("__match_slot" ^ string_of_int j)),
-                  Discard (App (free, [Var tmp_name])))
+         (* Release *before* the dispatch: a case body that `return`s ends the
+            function, so a release placed after the `match` would be skipped for
+            exactly the shapes every checked fixture uses. Every value a case
+            binds was copied into `__match_slot*` above, so no body reads the
+            freed union. *)
+         let releases =
+           List.fold_right (fun s acc -> Block (s, acc)) slot_lets
+             (Discard (App (free, [Var tmp_name])))
          in
-         let body = List.fold_right (fun s acc -> Block (s, acc)) slot_lets body in
-         Block (scrutinee_let, Block (tag_load, body)))
+         Block (scrutinee_let, Block (tag_load,
+           Block (releases,
+             dispatch (fun j -> Var ("__match_slot" ^ string_of_int j))))))
   | Mt.MWhile (cond, body) ->
       While (convert_expr cond, convert_stmt body)
   | Mt.MFor (id, start_expr, end_expr, body) ->
@@ -1198,19 +1520,29 @@ let rec convert_stmt (stmt: Mt.mstmt): CpsGen.cps_stmt =
       let second = convert_stmt s2 in
       Block (first, second)
   | Mt.MDiscarding expr ->
-      Discard (convert_expr expr)
+      (match caller_release_setup expr with
+       | Some (setup, _) -> Block (setup, Skip)
+       | None -> Discard (convert_expr expr))
   | Mt.MReturn expr ->
-      Return (narrow_float_literal !current_return_type expr)
+      (match caller_release_setup expr with
+       | Some (setup, ret_name) -> Block (setup, Return (Var ret_name))
+       | None -> Return (narrow_float_literal !current_return_type expr))
   | Mt.MLetTmp (id, ty, expr) ->
       Hashtbl.replace local_types (ident_string id) ty;
-      register_checked_owned (ident_string id) expr;
-      Let (ident_string id, narrow_float_literal ty expr, Skip)
+      (match caller_release_setup expr with
+       | Some (setup, ret_name) ->
+           Block (setup, Let (ident_string id, Var ret_name, Skip))
+       | None ->
+           register_checked_owned (ident_string id) expr;
+           Let (ident_string id, narrow_float_literal ty expr, Skip))
   | Mt.MAssignTmp (id, expr) ->
       let ty = match Hashtbl.find_opt local_types (ident_string id) with
         | Some ty -> ty
         | None -> MonoUnit
       in
-      Assign (ident_string id, narrow_float_literal ty expr)
+      (match caller_release_setup expr with
+       | Some (setup, ret_name) -> Block (setup, Assign (ident_string id, Var ret_name))
+       | None -> Assign (ident_string id, narrow_float_literal ty expr))
 
 and zero_value (ty: CpsGen.cps_type): CpsGen.cps_expr =
   match ty with
@@ -1225,14 +1557,32 @@ and zero_value (ty: CpsGen.cps_type): CpsGen.cps_expr =
 (* BUILD CPS FUNCTION FROM MAST DECLARATION *)
 (******************************************************************************)
 
+(* U15c: the parameters a call site transferred a checked union into. They are
+   registered as owned before the body is converted, so a `match` on one
+   releases it through the same path a local's release uses. *)
+let register_owned_parameters (key: string)
+    (params: Mt.mvalue_parameter list): unit =
+  match Hashtbl.find_opt checked_owned_fn_params key with
+  | None -> ()
+  | Some entries ->
+    List.iter
+      (fun (index, free) ->
+        match List.nth_opt params index with
+        | Some (Mt.MValueParameter (pid, _)) ->
+          Hashtbl.replace checked_owned_locals (ident_string pid) free
+        | None -> ())
+      entries
+
 let build_cps_function (decl: Mt.mdecl): CpsGen.function_def option =
   match decl with
-  | Mt.MFunction (_, name, params, ret_ty, body) ->
+  | Mt.MFunction (decl_id, name, params, ret_ty, body) ->
       let func_name = ident_string name in
       let param_names = List.map (fun (Mtast.MValueParameter (id, _)) -> ident_string id) params in
       let return_type = mono_ty_to_cps_type ret_ty in
       current_return_type := ret_ty;
       Hashtbl.reset local_types;
+      Hashtbl.reset checked_owned_locals;
+      register_owned_parameters (callee_decl_key decl_id) params;
       let body_stmt = convert_stmt body in
       Some {
         name = func_name;
@@ -1246,6 +1596,8 @@ let build_cps_function (decl: Mt.mdecl): CpsGen.function_def option =
       let return_type = mono_ty_to_cps_type ret_ty in
       current_return_type := ret_ty;
       Hashtbl.reset local_types;
+      Hashtbl.reset checked_owned_locals;
+      register_owned_parameters (callee_mono_key id) params;
       let body_stmt = convert_stmt body in
       Some {
         name = func_name;
@@ -1259,6 +1611,8 @@ let build_cps_function (decl: Mt.mdecl): CpsGen.function_def option =
       let return_type = mono_ty_to_cps_type ret_ty in
       current_return_type := ret_ty;
       Hashtbl.reset local_types;
+      Hashtbl.reset checked_owned_locals;
+      register_owned_parameters (callee_mono_key id) params;
       let body_stmt = convert_stmt body in
       Some {
         name = func_name;
@@ -1271,6 +1625,7 @@ let build_cps_function (decl: Mt.mdecl): CpsGen.function_def option =
       let return_type = mono_ty_to_cps_type ty in
       current_return_type := ty;
       Hashtbl.reset local_types;
+      Hashtbl.reset checked_owned_locals;
       Some {
         name = const_name;
         params = [];
@@ -1278,6 +1633,37 @@ let build_cps_function (decl: Mt.mdecl): CpsGen.function_def option =
         body = Return (narrow_float_literal ty expr)
       }
   | _ -> None
+
+(* A concrete instance method is emitted under its instance-method id, the
+   name every `MConcreteMethodCall` uses, so a call resolves to the body that
+   owns the parameter. Its transfer table entry is read before the body is
+   converted, exactly as `build_cps_function` does for a top-level function. *)
+let build_concrete_method_function
+    (Mt.MConcreteMethod (id, _name, params, ret_ty, body))
+    : CpsGen.function_def option =
+  let func_name = concrete_method_symbol id in
+  let param_names = List.map (fun (Mtast.MValueParameter (pid, _)) -> ident_string pid) params in
+  let return_type = mono_ty_to_cps_type ret_ty in
+  current_return_type := ret_ty;
+  Hashtbl.reset local_types;
+  Hashtbl.reset checked_owned_locals;
+  register_owned_parameters (callee_meth_key id) params;
+  let body_stmt = convert_stmt body in
+  Some {
+    name = func_name;
+    params = param_names;
+    return_type = return_type;
+    body = body_stmt
+  }
+
+(* One declaration can carry several functions: a concrete instance is a list
+   of methods. *)
+let build_cps_decl (decl: Mt.mdecl): CpsGen.function_def list =
+  match decl with
+  | Mt.MConcreteInstance (_, _, _, methods) ->
+      List.filter_map build_concrete_method_function methods
+  | _ ->
+      (match build_cps_function decl with Some f -> [f] | None -> [])
 
 (******************************************************************************)
 (* MAIN ENTRY POINT: COMPILE MODULE *)
@@ -1450,8 +1836,49 @@ let compile_module_cps (mono_module: Mt.mono_module): (CpsGen.function_def list 
         | Mt.MUnion (_, _, _) -> ()
         | _ -> ()
       ) decls;
-      (* Second pass: convert functions *)
-      (List.filter_map build_cps_function decls, mod_name_string name)
+      (* Second pass: convert functions. A transfer discovered while converting
+         a call site can make the callee's parameter owned, and that callee can
+         transfer the value on again, so convert until a pass adds no new
+         transfer. Entries are only ever added, so this terminates; only the
+         last pass's code is kept. *)
+      Hashtbl.reset local_concrete_methods;
+      List.iter
+        (function
+          | Mt.MConcreteInstance (_, _, _, methods) ->
+            List.iter
+              (function
+                | Mt.MConcreteMethod (id, _, _, _, _) ->
+                  Hashtbl.replace local_concrete_methods id ())
+              methods
+          | _ -> ())
+        decls;
+      (* Which callees this compilation emits. A call into any other one is
+         released by its caller (see {!caller_release_setup}). *)
+      Hashtbl.reset emitted_callee_keys;
+      xfer_counter := 0;
+      List.iter
+        (function
+          | Mt.MFunction (id, _, _, _, _) ->
+            Hashtbl.replace emitted_callee_keys (callee_decl_key id) ()
+          | Mt.MFunctionMonomorph (id, _, _, _)
+          | Mt.MMethodMonomorph (id, _, _, _) ->
+            Hashtbl.replace emitted_callee_keys (callee_mono_key id) ()
+          | Mt.MConcreteInstance (_, _, _, methods) ->
+            List.iter
+              (function
+                | Mt.MConcreteMethod (id, _, _, _, _) ->
+                  Hashtbl.replace emitted_callee_keys (callee_meth_key id) ())
+              methods
+          | _ -> ())
+        decls;
+      Hashtbl.reset checked_owned_fn_params;
+      Hashtbl.reset checked_param_conflicts;
+      let rec convert_until_stable () =
+        checked_transfers_changed := false;
+        let funcs = List.concat_map build_cps_decl decls in
+        if !checked_transfers_changed then convert_until_stable () else funcs
+      in
+      (convert_until_stable (), mod_name_string name)
 
 (******************************************************************************)
 (* BINARY GENERATION AND WRITING *)
@@ -1511,16 +1938,24 @@ let typed_exports (Mt.MonoModule (_, decls)): (string * string list * string) li
   let params (ps: Mt.mvalue_parameter list): string list =
     List.map (fun (Mt.MValueParameter (_, ty)) -> cps_type_name ty) ps
   in
-  List.filter_map (function
+  let decl_exports (decl: Mt.mdecl): (string * string list * string) list =
+    match decl with
     | Mt.MFunction (_, name, ps, ret_ty, _) ->
-        Some (ident_string name, params ps, cps_type_name ret_ty)
+        [ (ident_string name, params ps, cps_type_name ret_ty) ]
     | Mt.MFunctionMonomorph (id, ps, ret_ty, _) ->
-        Some ("monomorph_" ^ show_mono_id id, params ps, cps_type_name ret_ty)
+        [ ("monomorph_" ^ show_mono_id id, params ps, cps_type_name ret_ty) ]
     | Mt.MMethodMonomorph (id, ps, ret_ty, _) ->
-        Some ("method_" ^ show_mono_id id, params ps, cps_type_name ret_ty)
+        [ ("method_" ^ show_mono_id id, params ps, cps_type_name ret_ty) ]
+    | Mt.MConcreteInstance (_, _, _, methods) ->
+        List.map
+          (fun (Mt.MConcreteMethod (id, _, ps, ret_ty, _)) ->
+            (concrete_method_symbol id, params ps, cps_type_name ret_ty))
+          methods
     | Mt.MConstant (_, name, ty, _) ->
-        Some (ident_string name, [], cps_type_name ty)
-    | _ -> None) decls
+        [ (ident_string name, [], cps_type_name ty) ]
+    | _ -> []
+  in
+  List.concat_map decl_exports decls
 
 let debug_print_cps_functions (funcs: CpsGen.function_def list) =
   Printf.printf "CPS Functions: %d\n" (List.length funcs);

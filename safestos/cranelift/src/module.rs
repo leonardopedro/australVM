@@ -46,9 +46,29 @@ pub struct ModuleManifest {
     /// (`uk_resource_use`); the loopback installs them on the caller grant set.
     pub resources: Vec<String>,
     pub fs_grants: Vec<String>,
+    /// U19: the same entries with the rights each one carries. A plain string
+    /// entry is the historical all-rights grant; a `{ root, rights }` table
+    /// names a narrower one. Capability handles are opened with exactly these
+    /// rights, so `read` cannot imply `write` or `create`.
+    pub fs_root_rights: Vec<(String, crate::capstd_mod::caps::FsRights)>,
     pub net_grants: Vec<String>,
+    /// U20: the address ranges a dialed name must resolve into. Every resolved
+    /// address is checked, so an endpoint name alone is not a permission to
+    /// reach whatever it currently points at. Empty means every dial is
+    /// refused even when an endpoint is listed.
+    pub net_ranges: Vec<String>,
+    /// U20: the trust anchor bundle (PEM or DER, relative to the module
+    /// directory) TLS dials verify against. Absent means TLS is refused rather
+    /// than downgraded.
+    pub net_ca: Option<String>,
+    /// `[limits] net_timeout_ms` — connect and per-IO deadline for a dialed
+    /// connection (default 5 s).
+    pub net_timeout_ms: Option<u64>,
     /// `[limits] max_ms` — per-call deadline for the host↔sidecar RPC (default 5 s).
     pub max_ms: Option<u64>,
+    /// U19: `[limits] max_write_bytes` — cumulative bytes this instance may add
+    /// through its filesystem capabilities. Absent means no quota.
+    pub max_write_bytes: Option<u64>,
     /// `[limits] memory_bytes` — optional memory cap applied via cgroup where writable.
     pub memory_max_bytes: Option<u64>,
     /// S19 (F18): `[gatekeeper] mode` — side-effect provisioning for gatekeeper modules.
@@ -159,6 +179,11 @@ impl ModuleManifest {
             .and_then(|l| l.get("max_ms"))
             .and_then(|m| m.as_integer())
             .map(|m| m as u64);
+        let max_write_bytes = v
+            .get("limits")
+            .and_then(|l| l.get("max_write_bytes"))
+            .and_then(|m| m.as_integer())
+            .map(|m| m as u64);
         let memory_max_bytes = v
             .get("limits")
             .and_then(|l| l.get("memory_bytes"))
@@ -190,16 +215,61 @@ impl ModuleManifest {
                 _ => return Err("[module] node must be a non-empty string".to_string()),
             },
         };
-        let fs_grants = v
+        // U19: `[grants] fs` entries are either a path string (the historical
+        // all-rights grant) or a `{ root, rights }` table. Unknown keys, a table
+        // without `rights`, and an unknown right name are errors: a typo must
+        // not silently widen or narrow what the module can do.
+        let mut fs_grants: Vec<String> = Vec::new();
+        let mut fs_root_rights: Vec<(String, crate::capstd_mod::caps::FsRights)> = Vec::new();
+        if let Some(entries) = v
             .get("grants")
             .and_then(|g| g.get("fs"))
             .and_then(|f| f.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
+        {
+            for (index, entry) in entries.iter().enumerate() {
+                let (root, rights) = match entry {
+                    toml::Value::String(root) => {
+                        (root.clone(), crate::capstd_mod::caps::FsRights::ALL)
+                    }
+                    toml::Value::Table(table) => {
+                        for key in table.keys() {
+                            if key != "root" && key != "rights" {
+                                return Err(format!(
+                                    "[grants] fs[{index}] has unknown key {key:?} \
+                                     (expected root, rights)"
+                                ));
+                            }
+                        }
+                        let root = table
+                            .get("root")
+                            .and_then(|r| r.as_str())
+                            .ok_or_else(|| {
+                                format!("[grants] fs[{index}] needs a string `root`")
+                            })?
+                            .to_string();
+                        let text = table.get("rights").and_then(|r| r.as_str()).ok_or_else(
+                            || {
+                                format!(
+                                    "[grants] fs[{index}] ({root}) needs `rights`; a root \
+                                     without rights would be an implicit all-rights grant"
+                                )
+                            },
+                        )?;
+                        let rights = crate::capstd_mod::caps::FsRights::parse(text)
+                            .map_err(|e| format!("[grants] fs[{index}] ({root}): {e}"))?;
+                        (root, rights)
+                    }
+                    other => {
+                        return Err(format!(
+                            "[grants] fs[{index}] must be a path string or a \
+                             {{ root, rights }} table, got {other:?}"
+                        ))
+                    }
+                };
+                fs_grants.push(root.clone());
+                fs_root_rights.push((root, rights));
+            }
+        }
         let net_grants = v
             .get("grants")
             .and_then(|g| g.get("net"))
@@ -210,6 +280,28 @@ impl ModuleManifest {
                     .collect()
             })
             .unwrap_or_default();
+        // U20: the address ranges and trust anchor complete the network grant.
+        // A typo is refused when the policy is built, not ignored here.
+        let net_ranges = v
+            .get("grants")
+            .and_then(|g| g.get("net_ips"))
+            .and_then(|n| n.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let net_ca = v
+            .get("grants")
+            .and_then(|g| g.get("net_ca"))
+            .and_then(|n| n.as_str())
+            .map(String::from);
+        let net_timeout_ms = v
+            .get("limits")
+            .and_then(|l| l.get("net_timeout_ms"))
+            .and_then(|m| m.as_integer())
+            .map(|m| m as u64);
         let resources = v
             .get("grants")
             .and_then(|g| g.get("resources"))
@@ -242,8 +334,13 @@ impl ModuleManifest {
             observers,
             resources,
             fs_grants,
+            fs_root_rights,
             net_grants,
+            net_ranges,
+            net_ca,
+            net_timeout_ms,
             max_ms,
+            max_write_bytes,
             memory_max_bytes,
             gatekeeper_mode,
             strict,
@@ -526,12 +623,92 @@ impl ModuleHost {
                 // that cannot get its capability set is a failed load.
                 let state_dir = module_dir.join(".state");
                 let peers: Vec<String> = handle.manifest.node.clone().into_iter().collect();
-                match crate::capstd_mod::caps::InstanceCaps::new(
+                // U19: the state-dir handle gets the union of the rights on the
+                // grants rooted at it (`.`/`""`); with no `[grants] fs` at all it
+                // keeps the historical all-rights grant. Extra roots are opened
+                // only by index and carry exactly the rights the grant names.
+                let state_rights = if handle.manifest.fs_root_rights.is_empty() {
+                    crate::capstd_mod::caps::FsRights::ALL
+                } else {
+                    handle
+                        .manifest
+                        .fs_root_rights
+                        .iter()
+                        .filter(|(root, _)| {
+                            let root = root.trim();
+                            root.is_empty() || root == "."
+                        })
+                        .fold(
+                            crate::capstd_mod::caps::FsRights::NONE,
+                            |acc, (_, rights)| acc.union(*rights),
+                        )
+                };
+                let root_grants: Vec<crate::capstd_mod::caps::RootGrant> = handle
+                    .manifest
+                    .fs_root_rights
+                    .iter()
+                    .filter(|(root, _)| {
+                        let root = root.trim();
+                        !(root.is_empty() || root == ".")
+                    })
+                    .map(|(root, rights)| crate::capstd_mod::caps::RootGrant {
+                        root: root.trim().to_string(),
+                        rights: *rights,
+                    })
+                    .collect();
+                // U20: the network grant becomes a policy, not an ambient
+                // socket. An empty `[grants] net` issues no policy at all; a
+                // listed endpoint without ranges still refuses every dial, and
+                // an unreadable or malformed trust anchor is a failed load.
+                let net_policy = if handle.manifest.net_grants.is_empty() {
+                    None
+                } else {
+                    let built = (|| -> Result<crate::netstd_mod::NetPolicy, String> {
+                        let ca = match &handle.manifest.net_ca {
+                            Some(name) => {
+                                let path = module_dir.join(name);
+                                let bytes = std::fs::read(&path).map_err(|e| {
+                                    format!("cannot read network trust anchor {}: {e}", path.display())
+                                })?;
+                                crate::netstd_mod::certs_from_pem(&bytes)?
+                            }
+                            None => Vec::new(),
+                        };
+                        crate::netstd_mod::NetPolicy::new(
+                            &handle.manifest.net_grants,
+                            &handle.manifest.net_ranges,
+                            ca,
+                            std::time::Duration::from_millis(
+                                handle.manifest.net_timeout_ms.unwrap_or(5000),
+                            ),
+                        )
+                    })();
+                    match built {
+                        Ok(policy) => Some(policy),
+                        Err(error) => {
+                            crate::auth::restore_manifest_engine(previous_grants);
+                            auth::revoke_instance(instance);
+                            return Err(format!(
+                                "UK-4001: cannot construct network policy: {error}"
+                            ));
+                        }
+                    }
+                };
+                match crate::capstd_mod::caps::InstanceCaps::new_with_grants(
                     handle.manifest.name.clone(),
                     &state_dir,
                     peers,
+                    state_rights,
+                    root_grants,
+                    handle.manifest.max_write_bytes,
                 ) {
-                    Ok(caps) => crate::capstd_mod::caps::install(instance, caps),
+                    Ok(caps) => {
+                        let caps = match net_policy {
+                            Some(policy) => caps.with_net_policy(policy),
+                            None => caps,
+                        };
+                        crate::capstd_mod::caps::install(instance, caps)
+                    }
                     Err(error) => {
                         crate::auth::restore_manifest_engine(previous_grants);
                         auth::revoke_instance(instance);
@@ -719,15 +896,8 @@ impl ModuleHost {
             }
         }
 
-        let old_fs: std::collections::HashSet<&String> =
-            old_handle.manifest.fs_grants.iter().collect();
-        for g in &new_manifest.fs_grants {
-            if !old_fs.contains(g) {
-                return Err(format!(
-                    "UK-4001 swap rejected: new module escalates fs grant '{g}'"
-                ));
-            }
-        }
+        // A grant is a path *and* the rights it carries; both must not grow.
+        fs_grants_do_not_escalate(&old_handle.manifest, &new_manifest)?;
 
         // S4: the `effects` grant namespace must not escalate on swap either.
         let old_effects: std::collections::HashSet<&String> =
@@ -740,15 +910,12 @@ impl ModuleHost {
             }
         }
 
-        let old_net: std::collections::HashSet<&String> =
-            old_handle.manifest.net_grants.iter().collect();
-        for g in &new_manifest.net_grants {
-            if !old_net.contains(g) {
-                return Err(format!(
-                    "UK-4001 swap rejected: new module escalates net grant '{g}'"
-                ));
-            }
-        }
+        // U20: the network grant is the endpoint list, the address ranges, the
+        // trust anchor and the deadline. A swap may narrow any of them, never
+        // widen: a new endpoint or range is a new authority, a dropped or
+        // lengthened deadline is a looser one, and a different anchor is a
+        // different set of peers trusted under the same name.
+        net_grants_do_not_escalate(&old_handle.manifest, &new_manifest)?;
 
         // D08: a hot-swap may not relax the authority profile either. The new
         // binary keeps the identity it was loaded under, so a manifest that asks
@@ -1173,6 +1340,86 @@ unsafe fn call_jit_function(ptr: usize, args: &[i64]) -> i64 {
     }
 }
 
+/// U19: a replacement may narrow the filesystem grants and the write quota, never
+/// widen them. A path that was not granted before is a new grant; a right the old
+/// grant did not carry is an escalation. `None` quota means unlimited, so moving
+/// from a quota to `None` widens it.
+fn net_grants_do_not_escalate(
+    old: &ModuleManifest,
+    new: &ModuleManifest,
+) -> Result<(), String> {
+    let old_endpoints: std::collections::HashSet<&String> = old.net_grants.iter().collect();
+    for endpoint in &new.net_grants {
+        if !old_endpoints.contains(endpoint) {
+            return Err(format!(
+                "UK-4001 swap rejected: new module escalates net grant '{endpoint}'"
+            ));
+        }
+    }
+    let old_ranges: std::collections::HashSet<&String> = old.net_ranges.iter().collect();
+    for range in &new.net_ranges {
+        if !old_ranges.contains(range) {
+            return Err(format!(
+                "UK-4001 swap rejected: new module escalates network range '{range}'"
+            ));
+        }
+    }
+    if new.net_ca != old.net_ca {
+        return Err(
+            "UK-4001 swap rejected: the replacement changes the network trust anchor \
+             (unload and load it again instead)"
+                .to_string(),
+        );
+    }
+    match (old.net_timeout_ms, new.net_timeout_ms) {
+        (Some(old), None) => Err(format!(
+            "UK-4001 swap rejected: new module drops the {old}-ms network deadline"
+        )),
+        (Some(old), Some(new)) if new > old => Err(format!(
+            "UK-4001 swap rejected: new module widens the network deadline from {old} to \
+             {new} ms"
+        )),
+        _ => Ok(()),
+    }
+}
+
+fn fs_grants_do_not_escalate(
+    old: &ModuleManifest,
+    new: &ModuleManifest,
+) -> Result<(), String> {
+    let old_fs: std::collections::HashMap<&str, crate::capstd_mod::caps::FsRights> = old
+        .fs_root_rights
+        .iter()
+        .map(|(root, rights)| (root.as_str(), *rights))
+        .collect();
+    for (root, rights) in &new.fs_root_rights {
+        match old_fs.get(root.as_str()) {
+            None => {
+                return Err(format!(
+                    "UK-4001 swap rejected: new module escalates fs grant '{root}'"
+                ))
+            }
+            Some(old_rights) if !old_rights.contains(*rights) => {
+                return Err(format!(
+                    "UK-4001 swap rejected: new module escalates fs rights on '{root}' \
+                     from [{old_rights}] to [{rights}]"
+                ))
+            }
+            Some(_) => {}
+        }
+    }
+    match (old.max_write_bytes, new.max_write_bytes) {
+        (Some(old), None) => Err(format!(
+            "UK-4001 swap rejected: new module drops the {old}-byte write quota"
+        )),
+        (Some(old), Some(new)) if new > old => Err(format!(
+            "UK-4001 swap rejected: new module widens the write quota from {old} to \
+             {new} bytes"
+        )),
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ModuleHost, ModuleManifest};
@@ -1191,6 +1438,131 @@ memory_bytes = 134217728
         let m = ModuleManifest::from_toml_str(toml).expect("parse");
         assert_eq!(m.max_ms, Some(2500));
         assert_eq!(m.memory_max_bytes, Some(134217728));
+    }
+
+    #[test]
+    fn a_swap_may_narrow_but_not_widen_fs_grants_and_quota() {
+        use super::fs_grants_do_not_escalate;
+        use crate::capstd_mod::caps::FsRights;
+
+        let manifest = |grants: &str, quota: &str| {
+            ModuleManifest::from_toml_str(&format!(
+                "[module]\nname = \"m\"\n\n[grants]\nfs = [{grants}]\n\n[limits]\n{quota}"
+            ))
+            .expect("manifest parses")
+        };
+        let broad = manifest(
+            "{ root = \"data\", rights = \"read,write\" }",
+            "max_write_bytes = 4096",
+        );
+        let narrow = manifest("{ root = \"data\", rights = \"read\" }", "max_write_bytes = 1024");
+        assert!(fs_grants_do_not_escalate(&broad, &narrow).is_ok());
+        assert!(fs_grants_do_not_escalate(&narrow, &broad).is_err());
+
+        // A new right on an existing root is an escalation, and so is a new root.
+        let extra_right = manifest(
+            "{ root = \"data\", rights = \"read,list\" }",
+            "max_write_bytes = 1024",
+        );
+        let error = fs_grants_do_not_escalate(&narrow, &extra_right).unwrap_err();
+        assert!(error.contains("escalates fs rights"), "{error}");
+
+        let extra_root = manifest(
+            "{ root = \"data\", rights = \"read\" }, \
+             { root = \"cache\", rights = \"read\" }",
+            "max_write_bytes = 1024",
+        );
+        let error = fs_grants_do_not_escalate(&narrow, &extra_root).unwrap_err();
+        assert!(error.contains("escalates fs grant 'cache'"), "{error}");
+
+        // Dropping the quota makes the grant unlimited.
+        let unlimited = manifest("{ root = \"data\", rights = \"read\" }", "");
+        let error = fs_grants_do_not_escalate(&narrow, &unlimited).unwrap_err();
+        assert!(error.contains("drops the 1024-byte write quota"), "{error}");
+        assert_eq!(
+            manifest("{ root = \"data\", rights = \"read\" }", "").fs_root_rights[0].1,
+            FsRights::READ
+        );
+    }
+
+    /// U20: the manifest carries the endpoint list, the address ranges, the
+    /// trust anchor and the deadline, and a swap may narrow them but not widen
+    /// any of them.
+    #[test]
+    fn a_swap_may_narrow_but_not_widen_network_grants() {
+        use super::net_grants_do_not_escalate;
+
+        let manifest = |net: &str, ips: &str, ca: &str, timeout: &str| {
+            ModuleManifest::from_toml_str(&format!(
+                "[module]\nname = \"m\"\n\n[grants]\nnet = {net}\nnet_ips = {ips}{ca}\n\n\
+                 [limits]\n{timeout}"
+            ))
+            .expect("manifest parses")
+        };
+        let broad = manifest(
+            "[\"api.example.com:443\", \"127.0.0.1:8787\"]",
+            "[\"10.0.0.0/8\", \"127.0.0.0/8\"]",
+            "\nnet_ca = \"ca.pem\"",
+            "net_timeout_ms = 4000",
+        );
+        assert_eq!(broad.net_grants.len(), 2);
+        assert_eq!(broad.net_ranges.len(), 2);
+        assert_eq!(broad.net_ca.as_deref(), Some("ca.pem"));
+        assert_eq!(broad.net_timeout_ms, Some(4000));
+
+        let narrow = manifest(
+            "[\"127.0.0.1:8787\"]",
+            "[\"127.0.0.0/8\"]",
+            "\nnet_ca = \"ca.pem\"",
+            "net_timeout_ms = 1000",
+        );
+        assert!(net_grants_do_not_escalate(&broad, &narrow).is_ok());
+        assert!(net_grants_do_not_escalate(&narrow, &broad).is_err());
+
+        let extra_endpoint = manifest(
+            "[\"127.0.0.1:8787\", \"other.example.com:443\"]",
+            "[\"127.0.0.0/8\"]",
+            "\nnet_ca = \"ca.pem\"",
+            "net_timeout_ms = 1000",
+        );
+        let error = net_grants_do_not_escalate(&narrow, &extra_endpoint).unwrap_err();
+        assert!(error.contains("escalates net grant"), "{error}");
+
+        let extra_range = manifest(
+            "[\"127.0.0.1:8787\"]",
+            "[\"127.0.0.0/8\", \"10.0.0.0/8\"]",
+            "\nnet_ca = \"ca.pem\"",
+            "net_timeout_ms = 1000",
+        );
+        let error = net_grants_do_not_escalate(&narrow, &extra_range).unwrap_err();
+        assert!(error.contains("escalates network range"), "{error}");
+
+        let other_anchor = manifest(
+            "[\"127.0.0.1:8787\"]",
+            "[\"127.0.0.0/8\"]",
+            "\nnet_ca = \"other.pem\"",
+            "net_timeout_ms = 1000",
+        );
+        let error = net_grants_do_not_escalate(&narrow, &other_anchor).unwrap_err();
+        assert!(error.contains("changes the network trust anchor"), "{error}");
+
+        let longer = manifest(
+            "[\"127.0.0.1:8787\"]",
+            "[\"127.0.0.0/8\"]",
+            "\nnet_ca = \"ca.pem\"",
+            "net_timeout_ms = 9000",
+        );
+        let error = net_grants_do_not_escalate(&narrow, &longer).unwrap_err();
+        assert!(error.contains("widens the network deadline"), "{error}");
+
+        let unlimited = manifest(
+            "[\"127.0.0.1:8787\"]",
+            "[\"127.0.0.0/8\"]",
+            "\nnet_ca = \"ca.pem\"",
+            "",
+        );
+        let error = net_grants_do_not_escalate(&narrow, &unlimited).unwrap_err();
+        assert!(error.contains("drops the 1000-ms network deadline"), "{error}");
     }
 
     #[test]

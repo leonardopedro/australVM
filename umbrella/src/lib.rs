@@ -5,6 +5,7 @@
 //! pipeline (which needs the stock `austral` front-end).
 
 pub mod adapters;
+pub mod cache;
 pub mod cargo;
 pub mod cli;
 pub mod frontend;

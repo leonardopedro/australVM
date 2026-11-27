@@ -81,7 +81,7 @@
 -- capture this file was generated from. A stale digest means the
 -- comment describes files that have changed, and the gate fails.
 -- cites: mm0/proof_chain/native/add.capture sha256=e857a235efbf31286f361b638ae603989de3d3ea0adc7c1e6c38b39df7bde83c
--- cites: mm0/clif.mm0 sha256=dfe8194f99bd7bd02fe5b071caa648112f39e2772046e0b9167f021175f73745
+-- cites: mm0/clif.mm0 sha256=a4f156ac701d6e6145176f1e078a0a5073f0a524befd53d551b4a895aab8d42a
 -- cites: mm0/isa.mm0 sha256=4c3c28bc0002aad445d2c98713127e108af93f43f3f12fdc99b851051253a74b
 --
 -- MODEL. The arithmetic core is specified and *proved* in

@@ -26,6 +26,9 @@ pub struct AdapterCrate {
     /// Symbols a later reload calls on this build to retire its retained
     /// callbacks. Empty for a crate with no instance-lifetime callbacks.
     pub retire_symbols: Vec<String>,
+    /// Symbols a later reload calls on this build to drain its live handle
+    /// values. Empty for a crate with no handle table.
+    pub drain_symbols: Vec<String>,
 }
 
 /// The bridge rlib the generated wrappers compile against. The wrappers call
@@ -65,13 +68,13 @@ fn bridge_rlib() -> Result<PathBuf, String> {
 /// Render `adapters` at `generation` and compile them into a new cdylib under
 /// `dir`. Nothing is loaded here: the caller decides when the artifact becomes
 /// visible.
-pub fn build_at(
+/// The combined crate source: one module per adapter, all rendered at
+/// `generation`. Kept separate from the build so the cache can digest exactly
+/// what it stores a compiled image of.
+fn render_source(
     adapters: &[interface::GeneratedAdapter<'_>],
-    dir: &Path,
     generation: u32,
-    provider: Option<&Path>,
-) -> Result<AdapterCrate, String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+) -> Result<String, String> {
     let mut source = String::new();
     for (index, adapter) in adapters.iter().enumerate() {
         let wrapper = adapter
@@ -79,6 +82,17 @@ pub fn build_at(
             .map_err(|e| format!("render {}: {e}", adapter.symbol()))?;
         source.push_str(&format!("mod w{index} {{\n{wrapper}\n}}\n"));
     }
+    Ok(source)
+}
+
+pub fn build_at(
+    adapters: &[interface::GeneratedAdapter<'_>],
+    dir: &Path,
+    generation: u32,
+    provider: Option<&Path>,
+) -> Result<AdapterCrate, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    let source = render_source(adapters, generation)?;
     let file = dir.join(format!("adapters_{generation}.rs"));
     std::fs::write(&file, source).map_err(|e| format!("write {}: {e}", file.display()))?;
     let rlib = bridge_rlib()?;
@@ -125,6 +139,7 @@ pub fn build_at(
         generation,
         exports: adapters.iter().flat_map(|a| a.exported_symbols()).collect(),
         retire_symbols: adapters.iter().flat_map(|a| a.retirement_symbols()).collect(),
+        drain_symbols: adapters.iter().flat_map(|a| a.drain_symbols()).collect(),
     })
 }
 
@@ -170,6 +185,61 @@ pub fn build_next(adapters: &[interface::GeneratedAdapter<'_>]) -> Result<Adapte
     build_next_against(adapters, None)
 }
 
+/// Build the next generation through the run's cache when one is enabled.
+///
+/// The cache key is the rendered source plus the generation, the provider image
+/// it links and the bridge rlib it compiles against, all under the run's key.
+/// A hit maps the stored image and reserves its generation so a later build in
+/// this process cannot mint the same number; a miss builds into a scratch
+/// directory and stores a copy, so what a warm run maps is exactly what a cold
+/// run built. Without a provider there is no stable linkage identity, so the
+/// uncached build path is used.
+pub fn build_cached(
+    adapters: &[interface::GeneratedAdapter<'_>],
+    cache: Option<(&Path, &str)>,
+    provider: Option<&Path>,
+) -> Result<AdapterCrate, String> {
+    let (Some((root, key)), Some(provider)) = (cache, provider) else {
+        return build_next_against(adapters, provider);
+    };
+    let generation = interface::next_provider_generation();
+    let source = render_source(adapters, generation)?;
+    let rlib = bridge_rlib()?;
+    let provider = std::fs::canonicalize(provider).map_err(|e| {
+        format!(
+            "cannot resolve provider {} for adapter caching: {e}",
+            provider.display()
+        )
+    })?;
+    let digest = crate::cache::adapter_digest(&source, generation, &provider, &rlib)?;
+    match crate::cache::load_adapter(root, key, &digest) {
+        Ok(Some((path, cached_generation))) => {
+            interface::reserve_generation(cached_generation);
+            return Ok(AdapterCrate {
+                path,
+                generation: cached_generation,
+                exports: adapters.iter().flat_map(|a| a.exported_symbols()).collect(),
+                retire_symbols: adapters.iter().flat_map(|a| a.retirement_symbols()).collect(),
+                drain_symbols: adapters.iter().flat_map(|a| a.drain_symbols()).collect(),
+            });
+        }
+        Ok(None) => {}
+        Err(reason) => eprintln!("umbrella: adapter cache entry refused: {reason}"),
+    }
+    register_scratch_cleanup();
+    let scratch = std::env::temp_dir().join(format!(
+        "umbrella-adapters-{}-{generation}",
+        std::process::id()
+    ));
+    let built = build_at(adapters, &scratch, generation, Some(&provider))?;
+    let cached = crate::cache::store_adapter(root, key, &digest, &built.path, generation)?;
+    let _ = std::fs::remove_dir_all(&scratch);
+    Ok(AdapterCrate {
+        path: cached,
+        ..built
+    })
+}
+
 /// Build the next generation linked against the admitted provider. The legacy
 /// `build_next` leaves the reference unresolved for tests that map the provider
 /// globally themselves; the driver uses this form.
@@ -198,10 +268,15 @@ pub fn load(built: &AdapterCrate) -> Result<(), String> {
 /// each adapter symbol through the crate's own handle, and a preloaded same-named
 /// export cannot answer instead.
 pub fn load_for_jit(built: &AdapterCrate) -> Result<(), String> {
-    // A reload retires the *previous* builds' retained callbacks before the
-    // next table becomes visible. The JIT code that registered them is
-    // replaced, so a provider that kept a callback pointer must be refused at
-    // that pointer rather than call into stale code.
+    // A reload drains the *previous* builds' handle tables, then retires their
+    // retained callbacks, before the next table becomes visible. Draining runs
+    // the provider's destructors for values the replaced table still owned, so
+    // a generation swap neither leaks them nor lets a stale handle resolve a
+    // slot the new build numbers differently. A live view refuses the drain and
+    // the reload stops while the old build is still intact. Retirement is
+    // second because it makes a provider's kept callback pointer unusable:
+    // after that the old generation is no longer a complete build.
+    drain_older_than(built.generation)?;
     retire_older_than(built.generation)?;
     let handle = crate::policy::dlopen_local(&built.path)
         .map_err(|e| format!("map adapter crate {}: {e}", built.path.display()))?;
@@ -242,14 +317,15 @@ pub fn load_for_jit(built: &AdapterCrate) -> Result<(), String> {
         built.generation,
         handle.as_ptr() as usize,
         built.retire_symbols.clone(),
+        built.drain_symbols.clone(),
     ));
     Ok(())
 }
 
-/// Loaded adapter crates, oldest first: `(generation, image, retire hooks)`.
-/// The image is kept as an address because a raw pointer is not `Send`; the
-/// library is never unmapped, so it stays valid.
-static LOADED: std::sync::Mutex<Vec<(u32, usize, Vec<String>)>> =
+/// Loaded adapter crates, oldest first: `(generation, image, retire hooks,
+/// drain hooks)`. The image is kept as an address because a raw pointer is not
+/// `Send`; the library is never unmapped, so it stays valid.
+static LOADED: std::sync::Mutex<Vec<(u32, usize, Vec<String>, Vec<String>)>> =
     std::sync::Mutex::new(Vec::new());
 
 /// Retire every already-loaded build older than `next`. Each build exposes its
@@ -260,7 +336,7 @@ fn retire_older_than(next: u32) -> Result<(), String> {
         Ok(loaded) => loaded,
         Err(poisoned) => poisoned.into_inner(),
     };
-    for (generation, image, hooks) in loaded.iter() {
+    for (generation, image, hooks, _) in loaded.iter() {
         if *generation >= next {
             continue;
         }
@@ -281,6 +357,44 @@ fn retire_older_than(next: u32) -> Result<(), String> {
             if status != 0 {
                 return Err(format!(
                     "`{hook}` refused to retire generation {generation} (status {status})"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Drain every already-loaded build older than `next`: call each build's own
+/// `__drain` hook inside its own image, so two generations exporting the same
+/// hook name cannot answer for each other. A value a module still holds a view
+/// of makes the table refuse; that refusal stops the reload, because replacing
+/// a generation must not free a value that is still readable.
+fn drain_older_than(next: u32) -> Result<(), String> {
+    let loaded = match LOADED.lock() {
+        Ok(loaded) => loaded,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    for (generation, image, _, hooks) in loaded.iter() {
+        if *generation >= next {
+            continue;
+        }
+        for hook in hooks {
+            let name = std::ffi::CString::new(hook.as_str())
+                .map_err(|e| format!("{hook}: {e}"))?;
+            let address = unsafe { libc::dlsym(*image as *mut libc::c_void, name.as_ptr()) };
+            if address.is_null() {
+                return Err(format!(
+                    "generation {generation} does not export `{hook}`; the live \
+                     handles of the replaced build cannot be drained"
+                ));
+            }
+            // SAFETY: the generated hook is `extern \"C\" fn() -> i64`.
+            let drain: unsafe extern "C" fn() -> i64 = unsafe { std::mem::transmute(address) };
+            let status = unsafe { drain() };
+            if status != 0 {
+                return Err(format!(
+                    "`{hook}` refused to drain generation {generation} (status {status}): \
+                     a value in the replaced table is still borrowed"
                 ));
             }
         }

@@ -40,6 +40,10 @@ arctic = { path = "../../../dynamic-arctic", optional = true }
 serde_json = "1"
 hex = { version = "0.4", optional = true }
 libc = "0.2"
+# U20: bounded network capabilities. The dial path verifies TLS identity with
+# rustls and the ring provider; it is a direct dependency so the capability is
+# present in every bridge build, not behind a feature a module could omit.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 frunk = { version = "0.4", optional = true }
 cap-std = { version = "3", optional = true }
 unfer_consensus = { path = "../../../unfer/unfer_consensus", optional = true }

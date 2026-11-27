@@ -34,7 +34,7 @@ use std::sync::OnceLock;
 use austral_cranelift_bridge::{
     auth, compile_entry_i64, compile_to_function_named, cranelift_last_error, execute_function,
 };
-use umbrella::{cargo, cli, frontend, interface, policy, project, provider, trust};
+use umbrella::{cache, cargo, cli, frontend, interface, policy, project, provider, trust};
 
 /// U03's JSON event mode: stdout carries one typed event per line and human
 /// diagnostics stay on stderr. Set once, before any stage.
@@ -96,6 +96,18 @@ fn with_defaults(cli: umbrella::cli::Cli) -> umbrella::cli::Cli {
     if cli.crate_dir.is_none() {
         cli.crate_dir = Some(here.join("modules/rscrate"));
     }
+    // U18: a project document makes its own directory the cache home, so a
+    // checkout warms the same artifact across runs without a flag. `--cache-dir`
+    // still wins, and a run with no project document keeps the cache off.
+    if cli.cache_dir.is_none() {
+        if let Some(project) = &cli.project {
+            let base = project
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."));
+            cli.cache_dir = Some(base.join(".umbrella-cache"));
+        }
+    }
     cli
 }
 
@@ -144,39 +156,32 @@ fn render_wrapper_document(
 /// names the package and cdylib target at the crate directory, and only that
 /// exact `(package, target)` may match in the build stream — a dependency's
 /// cdylib or a proc-macro (also a `.so`) can no longer win by appearing first.
-fn cargo_build(cli: &cli::Cli, crate_dir: &PathBuf) -> Result<PathBuf, String> {
-    // U05 bullet 2: everything that varies about the build is stated on the
-    // command line, and everything that can vary it invisibly is recorded —
-    // or refused, in the case of a compiler wrapper.
-    let request = cargo::BuildRequest {
-        crate_dir: crate_dir.clone(),
-        package: cli.cargo_package.clone(),
-        target_dir: cli.target_dir.clone(),
-        profile: cli.profile,
-        features: cli.features.clone(),
-        locked: cli.locked,
-        offline: cli.offline,
+/// 1. The provider build, through the run's cache when one is enabled. A hit
+/// skips cargo entirely; a miss builds and stores a copy, and the *copy* is
+/// what the rest of the run maps and links so one path is shared by the
+/// provider, the adapter crate and the trust checks.
+fn provider_build_cached(
+    request: &cargo::BuildRequest,
+    cache: Option<(&std::path::Path, &str)>,
+) -> Result<(PathBuf, bool), String> {
+    let Some((root, key)) = cache else {
+        return cargo_build(request).map(|path| (path, false));
     };
-    let vars: Vec<(String, String)> = cargo::BUILD_AFFECTING_VARS
-        .iter()
-        .filter_map(|name| {
-            std::env::var(name)
-                .ok()
-                .map(|value| (name.to_string(), value))
-        })
-        .collect();
-    let recorded = cargo::build_environment(vars.iter().map(|(n, v)| (n.as_str(), v.as_str())))?;
-    if recorded.is_empty() {
-        eprintln!("umbrella: build environment: none of the build-affecting variables are set");
-    } else {
-        for (name, value) in &recorded {
-            eprintln!("umbrella: build environment: {name}={value}");
+    match cache::load_provider(root, key) {
+        Ok(Some(path)) => return Ok((path, true)),
+        Ok(None) => {}
+        Err(reason) => {
+            eprintln!("umbrella: provider cache entry refused: {reason}");
+            cache::invalidate_provider(root, key)?;
         }
     }
-    for config in cargo::cargo_config_files(crate_dir) {
-        eprintln!("umbrella: cargo config in effect: {}", config.display());
-    }
+    let built = cargo_build(request)?;
+    let cached = cache::store_provider(root, key, &built)?;
+    Ok((cached, false))
+}
 
+fn cargo_build(request: &cargo::BuildRequest) -> Result<PathBuf, String> {
+    let crate_dir = &request.crate_dir;
     let mut metadata_cmd = Command::new("cargo");
     metadata_cmd
         .arg("metadata")
@@ -239,28 +244,43 @@ fn front_end(
     austral: &PathBuf,
     modules: &[PathBuf],
     liquid_required: bool,
+    cache: Option<(&std::path::Path, &str)>,
 ) -> Result<
     (
         Vec<frontend::Artifact>,
         Vec<interface::BufferAdapter>,
         Vec<interface::HandleAdapter>,
         Vec<interface::Adapter>,
+        cache::Outcome,
     ),
     String,
 > {
-    // The front-end emits one CPS binary per run, covering the prefix of the
-    // source list it was given. Compile each prefix so every dependency body is
-    // in the JIT module as well as the entry module. This assumes the sources
-    // are listed in dependency order, which the compiler requires anyway.
-    let prefixes: Vec<&[PathBuf]> = if modules.len() <= 1 {
-        vec![modules]
-    } else {
-        (1..=modules.len()).map(|i| &modules[..i]).collect()
+    // U17: one compile over the whole list. `--emit-cps-bundle` makes the
+    // compiler write a single artifact holding every dependency's CPS as well as
+    // the entry module's, instead of one artifact per dependency prefix (each
+    // of which truncated the path). The list no longer has to be typed in
+    // dependency order: the imports are read from the sources, the list is
+    // refused when no order can exist (a duplicate name, a self-import, a
+    // cycle) and otherwise built leaf-first. The last module built is the
+    // bundle's namesake, and a client is not imported by its dependencies, so
+    // the client still comes last however the arguments were ordered.
+    let sources = frontend::read_module_sources(modules)?;
+    frontend::check_dependency_order(&sources)?;
+    let ordered: Vec<PathBuf> = frontend::dependency_order(&sources)?
+        .into_iter()
+        .map(|index| modules[index].clone())
+        .collect();
+    // U18: the artifact is content-addressed by the derived order, every source
+    // file, the compiler bytes and the lowering flags, so a warm run reuses the
+    // bytes without spawning the compiler. The hit is bytes, not an admission:
+    // the descriptor/export pins and the JIT call gate run below either way.
+    let (artifact, cache_outcome) = match cache {
+        Some((root, key)) => {
+            cache::compile_cached_keyed(austral, &ordered, liquid_required, root, key)?
+        }
+        None => cache::compile_cached(austral, &ordered, liquid_required, None)?,
     };
-    let mut artifacts = Vec::new();
-    for prefix in prefixes {
-        artifacts.push(frontend::compile(austral, prefix, liquid_required)?);
-    }
+    let artifacts = vec![artifact];
     let text = artifacts
         .last()
         .map(|a| a.adapters.clone())
@@ -276,7 +296,7 @@ fn front_end(
     // registries from 1, which is the owner tag the handle words carry.
     let handles = interface::HandleAdapter::parse_descriptors(&text)
         .map_err(|e| format!("adapter document: {e}"))?;
-    Ok((artifacts, buffers, handles, adapters))
+    Ok((artifacts, buffers, handles, adapters, cache_outcome))
 }
 
 /// 3.5. Generate the wrappers the front-end asked for and load them where the
@@ -290,8 +310,9 @@ fn front_end(
 fn build_adapters(
     adapters: &[interface::GeneratedAdapter<'_>],
     provider: &std::path::Path,
+    cache: Option<(&std::path::Path, &str)>,
 ) -> Result<PathBuf, String> {
-    let built = umbrella::adapters::build_next_against(adapters, Some(provider))?;
+    let built = umbrella::adapters::build_cached(adapters, cache, Some(provider))?;
     umbrella::adapters::load_for_jit(&built)?;
     Ok(built.path)
 }
@@ -463,12 +484,99 @@ fn main() {
         .map(|(_, pf)| pf.load.allowed())
         .unwrap_or(true);
 
+    // D18: a manifest's `[verify] liquid = "required"` is a compiler input,
+    // not just host metadata. It is decided before the cache key so a warm run
+    // cannot answer for a different lowering mode. A manifest that cannot be
+    // read is still an error *after* the build stage, which is where the run
+    // reported it before the cache existed; the key uses the CLI mode until
+    // then, and no front-end entry is written because the run stops first.
+    let (liquid_required, liquid_error) = match cli.manifest.as_ref() {
+        Some(path) => match frontend::manifest_requires_liquid(path) {
+            Ok(required) => (cli.liquid_required || required, None),
+            Err(e) => (cli.liquid_required, Some(e)),
+        },
+        None => (cli.liquid_required, None),
+    };
+
+    // U05: describe the build explicitly instead of reading it from the
+    // environment or hardcoding it. The request and the recorded environment
+    // are also part of the cache key, so a changed profile, feature set or
+    // build-affecting variable is a different key.
+    let krate = planned
+        .as_ref()
+        .and_then(|(d, _)| d.build.krate.clone())
+        .unwrap_or_else(|| default_crate_dir.clone());
+    let build_request = cargo::BuildRequest {
+        crate_dir: krate.clone(),
+        package: cli.cargo_package.clone(),
+        target_dir: cli.target_dir.clone(),
+        profile: cli.profile,
+        features: cli.features.clone(),
+        locked: cli.locked,
+        offline: cli.offline,
+    };
+    let build_env = if build_allowed {
+        let vars: Vec<(String, String)> = cargo::BUILD_AFFECTING_VARS
+            .iter()
+            .filter_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .map(|value| (name.to_string(), value))
+            })
+            .collect();
+        let recorded = match cargo::build_environment(
+            vars.iter().map(|(n, v)| (n.as_str(), v.as_str())),
+        ) {
+            Ok(recorded) => recorded,
+            Err(e) => die(e),
+        };
+        if recorded.is_empty() {
+            eprintln!("umbrella: build environment: none of the build-affecting variables are set");
+        } else {
+            for (name, value) in &recorded {
+                eprintln!("umbrella: build environment: {name}={value}");
+            }
+        }
+        for config in cargo::cargo_config_files(&krate) {
+            eprintln!("umbrella: cargo config in effect: {}", config.display());
+        }
+        recorded
+    } else {
+        Vec::new()
+    };
+
+    // U18: one key for this run's derived artifacts. The provider half is only
+    // part of it when a build is authorized, because only then is a provider
+    // build cached; a prebuilt provider is identified by the adapter digest.
+    let cache_root = cli.cache_dir.clone();
+    let provider_inputs = if build_allowed {
+        Some(cache::ProviderInputs {
+            request: build_request.clone(),
+            env: build_env.clone(),
+            skip: cache_root.iter().cloned().collect(),
+        })
+    } else {
+        None
+    };
+    let run_key = match &cache_root {
+        Some(_) => match cache::key(&cache::KeyInputs {
+            austral: &austral,
+            modules: &modules,
+            liquid_required,
+            provider: provider_inputs.as_ref(),
+        }) {
+            Ok(key) => Some(key),
+            Err(e) => die(e),
+        },
+        None => None,
+    };
+    let cache_pair = match (&cache_root, &run_key) {
+        (Some(root), Some(key)) => Some((root.as_path(), key.as_str())),
+        _ => None,
+    };
+
     // 1. cargo subprocess → artifact path (only when build is authorized).
-    let cdylib = if build_allowed {
-        let krate = planned
-            .as_ref()
-            .and_then(|(d, _)| d.build.krate.clone())
-            .unwrap_or_else(|| default_crate_dir.clone());
+    let (cdylib, provider_cached) = if build_allowed {
         // D09: the build is only attempted for the pinned dependency graph and
         // feature set. A mismatch is a refusal *here*, with no cargo process
         // started — building an arbitrary crate is executing its build scripts.
@@ -479,8 +587,8 @@ fn main() {
                 die(e);
             }
         }
-        match cargo_build(&cli, &krate) {
-            Ok(p) => p,
+        match provider_build_cached(&build_request, cache_pair) {
+            Ok(pair) => pair,
             Err(e) => die(e),
         }
     } else {
@@ -493,13 +601,17 @@ fn main() {
                     "umbrella: build not authorized; using prebuilt provider {}",
                     p.display()
                 );
-                p
+                (p, false)
             }
             None => die("build is not authorized and no prebuilt provider is declared"),
         }
     };
     if build_allowed {
-        eprintln!("umbrella: built {}", cdylib.display());
+        if provider_cached {
+            eprintln!("umbrella: provider cache hit; using {}", cdylib.display());
+        } else {
+            eprintln!("umbrella: built {}", cdylib.display());
+        }
     } else {
         eprintln!("umbrella: build not authorized; using {}", cdylib.display());
     }
@@ -579,26 +691,30 @@ fn main() {
         }
     }
 
-    // D18: a manifest's `[verify] liquid = "required"` is a compiler input,
-    // not just host metadata. The CLI flag can also request it (and is unioned
-    // with the manifest, never used to downgrade it).
-    let liquid_required = cli.liquid_required
-        || match cli.manifest.as_ref() {
-            Some(path) => match frontend::manifest_requires_liquid(path) {
-                Ok(required) => required,
-                Err(e) => die(e),
-            },
-            None => false,
-        };
+    if let Some(e) = liquid_error {
+        die(e);
+    }
 
     // 3. front-end subprocess → a checked compile-only artifact and the
     //    adapter descriptors. The staged outputs are gone by the time this
     //    returns; only the verified bytes and hash remain.
-    let (artifacts, buffers, handles, scalars) =
-        match front_end(&austral, &modules, liquid_required) {
+    let (artifacts, buffers, handles, scalars, cache_outcome) =
+        match front_end(&austral, &modules, liquid_required, cache_pair) {
             Ok(b) => b,
             Err(e) => die(e),
         };
+    match &cache_outcome {
+        cache::Outcome::Disabled => {}
+        cache::Outcome::Hit(key) => {
+            eprintln!("umbrella: front-end cache hit ({key}); the compiler did not run")
+        }
+        cache::Outcome::Miss(key) => {
+            eprintln!("umbrella: front-end cache miss ({key}); stored the artifact")
+        }
+        cache::Outcome::Invalid(_, reason) => {
+            eprintln!("umbrella: front-end cache entry refused: {reason}")
+        }
+    }
     let cps_bytes: usize = artifacts.iter().map(|a| a.cps.len()).sum();
     let functions: usize = artifacts.iter().map(|a| a.functions).sum();
     let cps_sha256 = frontend::digest(&artifacts);
@@ -717,6 +833,8 @@ fn main() {
         "adapters": descriptors,
         "adapters_sha256": descriptors_sha256,
         "functions": functions,
+        "cache": cache_outcome.label(),
+        "cache_key": cache_outcome.key(),
         "cps_bytes": cps_bytes,
         "cps_sha256": cps_sha256,
         "liquid": match artifacts.first().map(|a| a.liquid) {
@@ -745,7 +863,7 @@ fn main() {
         eprintln!("umbrella: the module needs no adapters");
     } else {
         let names: Vec<&str> = adapters.iter().map(|a| a.symbol()).collect();
-        match build_adapters(&adapters, &cdylib) {
+        match build_adapters(&adapters, &cdylib, cache_pair) {
             Ok(path) => eprintln!(
                 "umbrella: built and loaded {} adapter wrapper(s) ({}) from {}",
                 adapters.len(),
@@ -818,18 +936,64 @@ fn main() {
             } else {
                 project_dir.join(&caps.state_dir)
             };
-            match austral_cranelift_bridge::capstd_mod::caps::InstanceCaps::new(
+            // U19: the document's rights and roots are the capability set's
+            // authority. A malformed right is refused here, before anything is
+            // installed, rather than silently becoming a wider grant.
+            let state_rights = match caps.state_rights() {
+                Ok(rights) => rights,
+                Err(e) => die(format!("cannot construct capabilities: {e}")),
+            };
+            let roots = match caps.root_grants() {
+                Ok(roots) => roots,
+                Err(e) => die(format!("cannot construct capabilities: {e}")),
+            };
+            // U20: the document's network block becomes the dial policy. It is
+            // attached before installation, so the instance never exists for a
+            // moment with no policy and therefore no network authority.
+            let net_policy = match caps.net_policy(project_dir) {
+                Ok(policy) => policy,
+                Err(e) => die(format!("cannot construct capabilities: {e}")),
+            };
+            match austral_cranelift_bridge::capstd_mod::caps::InstanceCaps::new_with_grants(
                 doc.module.name.clone(),
                 &state_dir,
                 caps.peers.clone(),
+                state_rights,
+                roots,
+                caps.quota_bytes,
             ) {
                 Ok(set) => {
+                    let set = match net_policy {
+                        Some(policy) => set.with_net_policy(policy),
+                        None => set,
+                    };
                     austral_cranelift_bridge::capstd_mod::caps::install(instance.instance, set);
+                    let network = caps
+                        .network
+                        .as_ref()
+                        .map(|net| {
+                            format!(
+                                "{} endpoint(s) over {}, {}",
+                                net.endpoints.len(),
+                                net.allow_ips.join(","),
+                                if net.ca.is_some() {
+                                    "TLS anchor granted"
+                                } else {
+                                    "no TLS anchor"
+                                }
+                            )
+                        })
+                        .unwrap_or_else(|| "none".to_string());
                     eprintln!(
-                        "umbrella: instance {} at {} with peers {:?}",
+                        "umbrella: instance {} at {} with state rights [{}], {} root(s), \
+                         quota {:?}, peers {:?} and network {}",
                         doc.module.name,
                         state_dir.display(),
-                        caps.peers
+                        state_rights,
+                        caps.roots.len(),
+                        caps.quota_bytes,
+                        caps.peers,
+                        network
                     );
                     // The compiled entry runs inside this identity, so every gated
                     // call and every capability verb is attributed to *this*

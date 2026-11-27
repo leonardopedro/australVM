@@ -259,6 +259,7 @@ type cmd =
       auth_manifest: string option;
       emit_cps_path: string option;
       emit_cps_only: bool;
+      emit_cps_bundle: bool;
       emit_adapters_path: string option;
       pkg_totality: bool;
       liquid_required: bool;
@@ -514,6 +515,13 @@ let parse_compile_command' (arglist: arglist): (arglist * cmd) =
     | Some arglist -> (true, arglist)
     | None -> (false, arglist)
   in
+  (* Parse --emit-cps-bundle flag (U17: one artifact holding every module of
+     this invocation, instead of each module truncating the path). *)
+  let (emit_cps_bundle, arglist) =
+    match pop_bool_flag arglist "emit-cps-bundle" with
+    | Some arglist -> (true, arglist)
+    | None -> (false, arglist)
+  in
   (* Parse --emit-adapters=<path> flag (U11: write the canonical adapter
      descriptors for the foreign calls that need a generated wrapper) *)
   let (emit_adapters_path, arglist) =
@@ -570,7 +578,7 @@ let parse_compile_command' (arglist: arglist): (arglist * cmd) =
   else
     (* Parse the target type. *)
     let (arglist, target): (arglist * target) = parse_target_type arglist in
-    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; use_cps_jit = use_cps_jit || jit_server; jit_server = jit_server; allow_all = allow_all; auth_manifest = auth_manifest; emit_cps_path = emit_cps_path; emit_cps_only = emit_cps_only; emit_adapters_path = emit_adapters_path; pkg_totality = pkg_totality; liquid_required = liquid_required; emit_derivations = emit_derivations; emit_linearity_ledger = emit_linearity_ledger; })
+    (arglist, WholeProgramCompile { modules = modules; target = target; error_reporting_mode = error_reporting_mode; use_cps_jit = use_cps_jit || jit_server; jit_server = jit_server; allow_all = allow_all; auth_manifest = auth_manifest; emit_cps_path = emit_cps_path; emit_cps_only = emit_cps_only; emit_cps_bundle = emit_cps_bundle; emit_adapters_path = emit_adapters_path; pkg_totality = pkg_totality; liquid_required = liquid_required; emit_derivations = emit_derivations; emit_linearity_ledger = emit_linearity_ledger; })
 
 let parse_compile_command (arglist: arglist): (arglist * cmd) =
   match pop_bool_flag arglist "help" with

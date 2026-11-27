@@ -44,6 +44,24 @@ module body EitherImport is
         end case;
     end;
 
+    -- U15c transfer: the checked union crosses this call boundary and is
+    -- released by `consume`'s own `match`, not by the caller. `computeThrough`
+    -- returns 11 only when the callee read Right(7) and released the union;
+    -- the allocation counter test invokes it repeatedly and requires the
+    -- wrapper's live allocation count to stay at its baseline.
+    function consume(value: Either[Int64, Int64]): Int64 is
+        case value of
+            when Right(right: Int64) do
+                return right + 4;
+            when Left(left: Int64) do
+                return left + 13;
+        end case;
+    end;
+
+    function computeThrough(): Int64 is
+        return consume(rs_choose(1));
+    end;
+
     function main(): ExitCode is
         return ExitSuccess();
     end;

@@ -585,6 +585,45 @@ impl<T> HandleRegistry<T> {
             .ok_or(HandleError::UnknownBorrow { id: w0 })
     }
 
+    /// Destroy every live value and free its slot: the generation-replacement
+    /// seam. A provider reload replaces this table, so the values it holds must
+    /// run their destructors *here* instead of being stranded for the life of
+    /// the process. A live borrow refuses the whole drain, because the value a
+    /// module can still read must not be freed under it; the reload then fails
+    /// rather than leaking or pulling a value out from under a view.
+    ///
+    /// Returns the number of values destroyed. Slot generations advance exactly
+    /// as `take` advances them, so a handle the module kept is stale afterwards.
+    pub fn drain(&mut self) -> Result<u64, HandleError> {
+        if let Some(claim) = self.claims.first() {
+            return Err(HandleError::Borrowed {
+                slot: claim.index,
+                generation: self.slots[claim.index as usize].generation,
+                mutable: claim.mutable,
+            });
+        }
+        let mut drained = 0;
+        for index in 0..self.slots.len() {
+            let slot = &mut self.slots[index];
+            if !matches!(slot.state, State::Live(_)) {
+                continue;
+            }
+            // Assignment drops the value, which is the provider's destructor.
+            slot.state = State::Free;
+            match slot.generation.checked_add(1) {
+                Some(next) => {
+                    slot.generation = next;
+                    self.free.push(index as u32);
+                }
+                None => self.retired += 1,
+            }
+            self.released += 1;
+            self.freed += 1;
+            drained += 1;
+        }
+        Ok(drained)
+    }
+
     /// Discharge a claim. A token this registry did not issue, or one already
     /// released, is refused rather than counted down twice.
     pub fn release(&mut self, borrow: Borrow) -> Result<(), HandleError> {
@@ -1116,6 +1155,41 @@ mod tests {
             registry.release_words(0, 7),
             Err(HandleError::UnknownBorrow { .. })
         ));
+    }
+
+    #[test]
+    fn draining_destroys_live_values_and_refuses_a_held_borrow() {
+        let mut registry = registry();
+        let a = registry.insert(1).unwrap();
+        let b = registry.insert(2).unwrap();
+        let (lo, hi) = a.to_words();
+        let view = registry.borrow(a).unwrap();
+
+        // A value a module can still read must not be freed under the view:
+        // the whole drain is refused, not partly applied.
+        assert!(matches!(
+            registry.drain(),
+            Err(HandleError::Borrowed { mutable: false, .. })
+        ));
+        assert_eq!(registry.live(), 2);
+        assert_eq!(registry.freed(), 0);
+
+        registry.release(view).unwrap();
+        assert_eq!(registry.drain(), Ok(2));
+        assert_eq!(registry.live(), 0);
+        assert_eq!(registry.freed(), 2, "draining is destruction, not release");
+        // The values are gone and so are the handles that named them.
+        assert!(matches!(registry.get(a), Err(HandleError::Stale { .. })));
+        assert!(matches!(registry.get(b), Err(HandleError::Stale { .. })));
+        assert!(matches!(
+            registry.get_words(lo, hi),
+            Err(HandleError::Stale { .. })
+        ));
+        // Drained slots are free for the next values, with a bumped generation.
+        let next = registry.insert(3).unwrap();
+        assert_eq!(registry.get(next), Ok(&3));
+        assert_eq!(registry.drain(), Ok(1));
+        assert_eq!(registry.live(), 0);
     }
 
     #[test]

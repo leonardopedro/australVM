@@ -28,6 +28,7 @@ pub const USAGE: &str = "usage: umbrella [--project <json>] [--manifest <toml>] 
        \x20            [--cargo-package <name>] [--target-dir <dir>]\n\
        \x20            [--profile dev|release] [--features <list>]... [--locked] [--offline]\n\
        \x20            [--liquid-required] [--emit-trust-record <json>]\n\
+       \x20            [--cache-dir <dir>]\n\
        \x20            [--descriptor-document <file> --emit-wrappers <dir>]\n\
        \x20            [--] <module.aum>...\n\
        \x20      umbrella --help | --version";
@@ -58,6 +59,11 @@ pub struct Cli {
     /// implies, so a project document can be generated instead of copied by
     /// hand.
     pub emit_trust_record: Option<PathBuf>,
+    /// U18: where the run's derived artifacts live. Left unset, a project
+    /// document defaults it to `<project dir>/.umbrella-cache`; a run with no
+    /// project document keeps the cache off. The key is derived from every
+    /// input the artifacts depend on.
+    pub cache_dir: Option<PathBuf>,
     /// U21 bounded start: the compiler-emitted adapter document to render
     /// wrappers from, without compiling or loading a module.
     pub descriptor_document: Option<PathBuf>,
@@ -310,6 +316,10 @@ where
                     take_value("emit-trust-record", false)?,
                     "emit-trust-record",
                 )?);
+            }
+            "cache-dir" => {
+                once(&mut seen, "cache-dir")?;
+                cli.cache_dir = Some(path_value(take_value("cache-dir", false)?, "cache-dir")?);
             }
             "descriptor-document" => {
                 once(&mut seen, "descriptor-document")?;
@@ -600,6 +610,23 @@ mod tests {
             let err = p(&args).unwrap_err();
             assert!(err.0.contains(needle), "{args:?} -> {err}");
         }
+    }
+
+    #[test]
+    fn the_cache_directory_is_opt_in_and_single_valued() {
+        assert_eq!(run(&["D.aum"]).cache_dir, None);
+        assert_eq!(
+            run(&["--cache-dir", "/w/cache", "D.aum"]).cache_dir,
+            Some(PathBuf::from("/w/cache"))
+        );
+        assert!(p(&["--cache-dir", "", "D.aum"])
+            .unwrap_err()
+            .0
+            .contains("non-empty path"));
+        assert!(p(&["--cache-dir", "a", "--cache-dir", "b", "D.aum"])
+            .unwrap_err()
+            .0
+            .contains("duplicate option `--cache-dir`"));
     }
 
     #[test]

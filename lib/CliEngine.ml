@@ -89,9 +89,12 @@ let rec exec (cmd: cmd): unit =
      print_version ()
   | CompileHelp ->
      print_compile_usage ()
-  | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit; jit_server; allow_all; auth_manifest; emit_cps_path; emit_cps_only; emit_adapters_path; pkg_totality; liquid_required; emit_derivations; emit_linearity_ledger } ->
+  | WholeProgramCompile { modules; target; error_reporting_mode; use_cps_jit; jit_server; allow_all; auth_manifest; emit_cps_path; emit_cps_only; emit_cps_bundle; emit_adapters_path; pkg_totality; liquid_required; emit_derivations; emit_linearity_ledger } ->
      if emit_cps_only && emit_cps_path = None then
        err "--emit-cps-only requires --emit-cps=<path>.";
+     if emit_cps_bundle && not emit_cps_only then
+       err "--emit-cps-bundle requires --emit-cps-only (the bundling is a \
+            compile-only artifact mode).";
      if emit_cps_only && (not use_cps_jit) && (not jit_server) then
        err "--emit-cps-only requires --use-cps-jit (the CPS lowering).";
      validate_jit_server_target jit_server target;
@@ -125,6 +128,7 @@ let rec exec (cmd: cmd): unit =
      Compiler.jit_server_mode := jit_server;
      Compiler.emit_cps_path := emit_cps_path;
      Compiler.emit_cps_only := emit_cps_only;
+     Compiler.emit_cps_bundle := emit_cps_bundle;
      Compiler.emit_adapters_path := emit_adapters_path;
      Compiler.pkg_totality := pkg_totality;
      Compiler.liquid_required := liquid_required;
@@ -196,6 +200,9 @@ and compile_help_lines (): string list =
     "                    authorization engine.";
     "    --emit-cps      Save CPS binary IR to the given path.";
     "    --emit-cps-only Emit the CPS artifact and stop: no bridge init, no JIT.";
+    "    --emit-cps-bundle  With --emit-cps-only, one artifact holding every";
+    "                    module of this invocation (instead of each module's";
+    "                    lowering truncating the path).";
     "    --emit-adapters Write the adapter descriptors the CPS lowering requires.";
     "    --pkg-totality[=true|false]  Package modules only: run the totality";
     "                    pass, which rejects while loops, recursion, foreign/embed";

@@ -60,6 +60,10 @@ val emit_cps_path : string option ref
 (** U07: emit the CPS artifact without initializing the bridge or compiling it.
     No C output and no JIT fallback: an empty or failed lowering raises. *)
 val emit_cps_only : bool ref
+(** U17: accumulate every module's functions into one CPS artifact. The caller
+    must invoke {!flush_cps_bundle} after the whole source list is lowered. *)
+val emit_cps_bundle : bool ref
+val flush_cps_bundle : unit -> unit
 
 (** U11: where to write the canonical adapter descriptors the CPS lowering
     requires, in the form `umbrella/src/interface.rs` parses. *)

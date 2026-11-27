@@ -63,7 +63,12 @@ let boot () =
     register_compiler
       {
         name = "austral-builtin";
-        compile = (fun mods -> compile_multiple empty_compiler mods);
+        compile = (fun mods ->
+          (* U17: a bundled compile-only artifact is written once, after every
+             module has been lowered; a no-op in every other mode. *)
+          let compiler = compile_multiple empty_compiler mods in
+          Compiler.flush_cps_bundle ();
+          compiler);
       }
 
 let run_compiler (mods : module_source list) : Compiler.compiler =

@@ -53,6 +53,35 @@ let emit_cps_path = ref (None: string option)
    product of this mode, so an unresolved symbol is a fact about the caller's
    environment, not a lowering failure. CLI: `--emit-cps-only`. *)
 let emit_cps_only = ref false
+(* U17: bundle every module of one invocation into a single CPS artifact. The
+   compiler lowers one module at a time and each lowering would truncate the
+   artifact, so the functions are accumulated here and written once, after the
+   whole source list has been lowered. CLI: `--emit-cps-bundle`. *)
+let emit_cps_bundle = ref false
+let bundled_functions : CpsGen.function_def list ref = ref []
+let bundled_module_name = ref ""
+
+(* Write the accumulated bundle. Called once per compile invocation, after
+   every module has been lowered; a compile that raised never gets here, so a
+   failed module cannot leave a partial artifact. *)
+let flush_cps_bundle (): unit =
+  if !emit_cps_bundle then begin
+    match !emit_cps_path with
+    | None -> ()
+    | Some path ->
+      let funcs = !bundled_functions in
+      if funcs = [] then
+        austral_raise GenericError [
+          ErrorText.Text
+            "The CPS lowering produced no functions, so a bundled compile-only \
+             artifact would be empty. No CPS artifact was written." ];
+      let module_name = !bundled_module_name in
+      let binary = CpsGen.serialize_functions ~module_name funcs in
+      Compiler_cps.write_cps_binary funcs module_name path;
+      Printf.eprintf "CPS JIT: Generated %d functions (%d bytes)\n%!"
+        (List.length funcs) (String.length binary);
+      Printf.eprintf "CPS JIT: Emitted CPS binary to %s\n%!" path
+  end
 (* U11: the adapter descriptors the CPS lowering requires, in the canonical
    text form `umbrella/src/interface.rs` parses. *)
 let emit_adapters_path = ref (None: string option)
@@ -267,13 +296,22 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
                       austral_raise GenericError [
                         ErrorText.Text "--emit-cps-only requires --emit-cps=<path>." ]
                  in
-                 let binary = CpsGen.serialize_functions ~module_name funcs in
                  (if Sys.getenv_opt "CPS_DEBUG" <> None then
                     Compiler_cps.debug_print_cps_functions funcs);
-                 Compiler_cps.write_cps_binary funcs module_name path;
-                 Printf.eprintf "CPS JIT: module %s\n%!" module_name;
-                 Printf.eprintf "CPS JIT: Generated %d functions (%d bytes)\n%!"
-                   (List.length funcs) (String.length binary);
+                 if !emit_cps_bundle then begin
+                   (* The artifact is written once, after every module has been
+                      lowered: a per-module write would truncate the previous
+                      module's functions. *)
+                   bundled_functions := !bundled_functions @ funcs;
+                   bundled_module_name := module_name;
+                   Printf.eprintf "CPS JIT: module %s\n%!" module_name
+                 end else begin
+                   let binary = CpsGen.serialize_functions ~module_name funcs in
+                   Compiler_cps.write_cps_binary funcs module_name path;
+                   Printf.eprintf "CPS JIT: module %s\n%!" module_name;
+                   Printf.eprintf "CPS JIT: Generated %d functions (%d bytes)\n%!"
+                     (List.length funcs) (String.length binary)
+                 end;
                  (* U07: the structured typed-export list. The CPS binary has
                     parameter names but no parameter types; the monomorphic
                     module still does, and these are the wire types the binary
@@ -282,7 +320,8 @@ let rec compile_mod (c: compiler) (source: module_source): compiler =
                    Printf.eprintf "CPS JIT: export\t%s\t%s\t%s\n%!"
                      name (String.concat "," params) ret)
                    (Compiler_cps.typed_exports mono);
-                 Printf.eprintf "CPS JIT: Emitted CPS binary to %s\n%!" path;
+                 if not !emit_cps_bundle then
+                   Printf.eprintf "CPS JIT: Emitted CPS binary to %s\n%!" path;
                  Compiler (env, compiler_code c)
                with
                | Austral_error _ as exn -> raise exn
