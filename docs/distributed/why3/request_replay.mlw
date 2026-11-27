@@ -1,0 +1,321 @@
+(* D21: the request-replay claim, stated symbolically and discharged by an SMT
+   prover through Why3.
+
+   THE CLAIM. `AdmissionBook` must answer a retried request from its record, and
+   must never apply it twice:
+
+     (R1) replay -- an id that is still retained, presented with the bytes it
+          was recorded under, is answered `Duplicate` with the recorded outcome
+          and never `Fresh` (`replay_is_the_recorded_outcome`); a request that
+          has just been recorded replays as a duplicate of its pending outcome
+          (`record_then_admit_is_duplicate`, with the post-state window supplied
+          by `record_window`, `recorded_window_lookup` and
+          `recorded_window_floor`).
+     (R2) equivocation -- the same id with different bytes is a `Conflict` that
+          names both digests (`equivocation_is_a_conflict`); nothing is applied.
+     (R3) retention -- an id at or below the retained floor is refused
+          (`below_floor_is_refused`), `acknowledge` only raises the floor
+          (`acknowledge_raises_the_floor`), and a retry below it is still
+          refused afterwards (`retry_after_acknowledge_is_refused`).
+     (R4) mutation -- a settle cannot invent a record
+          (`settle_without_a_record_changes_nothing`); where it does apply it
+          keeps the digest and the floor (`settle_lookup`,
+          `settle_keeps_the_floor`) and the next admission is a `Duplicate` of
+          the new outcome (`settle_keeps_the_digest`).
+     (R5) namespaces -- incarnations are separate: a record under one leaves the
+          other alone (`record_leaves_another_incarnation_alone`), and an entry
+          held under another incarnation cannot answer a retry
+          (`another_incarnation_cannot_answer_a_retry`).
+     (R6) bounds -- `Fresh` respects the entry capacity
+          (`fresh_respects_capacity`), the entry is absent when `Fresh` is
+          returned (`fresh_means_absent`), and `Fresh` respects the incarnation
+          limit (`fresh_respects_incarnations`); `record` counts a new id once
+          and an existing id not at all (`record_counts_a_new_entry_once`,
+          `record_does_not_count_an_existing_entry`).
+
+   WHAT IS MODELLED. The decision table of `AdmissionBook::admit` in the order
+   the implementation checks it -- floor, then the recorded entry, then
+   capacity, then the incarnation bounds -- for two client incarnations and two
+   request ids. Digests and outcomes are abstract integers: R1/R2 are about
+   equality of bindings, not about the digest function. `record`, `settle` and
+   `acknowledge` are modelled because R1/R4 are statements about what a retry
+   may produce after them.
+
+   WHAT IS NOT MODELLED. Unbounded sequence spaces and an unbounded number of
+   incarnations: those are explored by
+   `unfer_consensus/tests/request_replay_invariant.rs` and its conformance run.
+   The JSON persistence and the digest function are outside this theory.
+*)
+
+module RequestReplay
+
+  use int.Int
+  use option.Option
+
+  type outcome = Pending int | Decided int
+
+  type entry = { digest: int; outcome: outcome }
+
+  type window = {
+    floor: int;
+    has0: bool; e0: entry;
+    has1: bool; e1: entry;
+  }
+
+  type book = {
+    holds0: bool; w0: window;
+    holds1: bool; w1: window;
+    retained: int;
+    capacity: int;
+    max_scopes: int;
+    max_incarnations: int;
+  }
+
+  type verdict =
+    | Fresh
+    | Duplicate outcome
+    | Conflict int int
+    | BelowRetention int
+    | AtCapacity int
+    | IncarnationsExhausted int int
+
+  constant dummy : entry = { digest = 0; outcome = Pending 0 }
+
+  constant empty_window : window =
+    { floor = 0; has0 = false; e0 = dummy; has1 = false; e1 = dummy }
+
+  function live (b: book) : int =
+    (if b.holds0 then 1 else 0) + (if b.holds1 then 1 else 0)
+
+  predicate wf (b: book) =
+    b.capacity >= 1 && b.max_scopes >= 1 && b.max_incarnations >= 1
+    && b.retained >= 0
+
+  function lookup (w: window) (seq: int) : option entry =
+    if seq = 0 then (if w.has0 then Some w.e0 else None)
+    else if seq = 1 then (if w.has1 then Some w.e1 else None)
+    else None
+
+  function window_of (b: book) (inc: int) : option window =
+    if inc = 0 then (if b.holds0 then Some b.w0 else None)
+    else if inc = 1 then (if b.holds1 then Some b.w1 else None)
+    else None
+
+  predicate present (b: book) (inc: int) (seq: int) =
+    match window_of b inc with
+    | Some w -> lookup w seq <> None
+    | None -> false
+    end
+
+  function set_entry (w: window) (seq: int) (e: entry) : window =
+    if seq = 0 then { w with has0 = true; e0 = e }
+    else { w with has1 = true; e1 = e }
+
+  function set_outcome (w: window) (seq: int) (o: outcome) : window =
+    if seq = 0 && w.has0 then { w with e0 = { w.e0 with outcome = o } }
+    else if seq = 1 && w.has1 then { w with e1 = { w.e1 with outcome = o } }
+    else w
+
+  function admit (b: book) (inc: int) (seq: int) (digest: int) : verdict =
+    match window_of b inc with
+    | Some w ->
+        if seq <= w.floor then BelowRetention w.floor
+        else match lookup w seq with
+             | Some e ->
+                 if e.digest = digest then Duplicate e.outcome
+                 else Conflict e.digest digest
+             | None ->
+                 if b.retained >= b.capacity then AtCapacity b.capacity else Fresh
+             end
+    | None ->
+        if b.retained >= b.capacity then AtCapacity b.capacity
+        else if live b >= b.max_incarnations then
+          IncarnationsExhausted b.max_incarnations (live b)
+        else if live b >= b.max_scopes then AtCapacity b.max_scopes
+        else Fresh
+    end
+
+  function recorded_window (b: book) (inc: int) (seq: int) (digest: int)
+                            (sub: int) : window =
+    let e = { digest = digest; outcome = Pending sub } in
+    match window_of b inc with
+    | Some w -> set_entry w seq e
+    | None -> set_entry empty_window seq e
+    end
+
+  function record (b: book) (inc: int) (seq: int) (digest: int) (sub: int) : book =
+    let w' = recorded_window b inc seq digest sub in
+    let fresh = not (present b inc seq) in
+    if inc = 0 then
+      { b with holds0 = true; w0 = w';
+               retained = if fresh then b.retained + 1 else b.retained }
+    else
+      { b with holds1 = true; w1 = w';
+               retained = if fresh then b.retained + 1 else b.retained }
+
+  function settle (b: book) (inc: int) (seq: int) (o: outcome) : book =
+    if inc = 0 then
+      if b.holds0 then
+        if lookup b.w0 seq = None then b else { b with w0 = set_outcome b.w0 seq o }
+      else b
+    else
+      if b.holds1 then
+        if lookup b.w1 seq = None then b else { b with w1 = set_outcome b.w1 seq o }
+      else b
+
+  function acknowledge (b: book) (inc: int) (through: int) : book =
+    if inc = 0 then
+      if b.holds0 then
+        { b with w0 = { b.w0 with floor =
+            (if through > b.w0.floor then through else b.w0.floor) } }
+      else b
+    else
+      if b.holds1 then
+        { b with w1 = { b.w1 with floor =
+            (if through > b.w1.floor then through else b.w1.floor) } }
+      else b
+
+  (* --- R1/R2: replay and equivocation ------------------------------------ *)
+
+  lemma replay_is_the_recorded_outcome:
+    forall b: book, inc seq digest: int, w: window, e: entry.
+      window_of b inc = Some w -> lookup w seq = Some e -> seq > w.floor ->
+      e.digest = digest ->
+      admit b inc seq digest = Duplicate e.outcome
+
+  lemma equivocation_is_a_conflict:
+    forall b: book, inc seq digest: int, w: window, e: entry.
+      window_of b inc = Some w -> lookup w seq = Some e -> seq > w.floor ->
+      e.digest <> digest ->
+      admit b inc seq digest = Conflict e.digest digest
+
+  (* --- R3: a forgotten request is refused, not re-applied ---------------- *)
+
+  lemma below_floor_is_refused:
+    forall b: book, inc seq digest: int, w: window.
+      window_of b inc = Some w -> seq <= w.floor ->
+      admit b inc seq digest = BelowRetention w.floor
+
+  lemma record_window:
+    forall b: book, inc seq digest sub: int.
+      0 <= inc && inc <= 1 ->
+      window_of (record b inc seq digest sub) inc
+        = Some (recorded_window b inc seq digest sub)
+
+  lemma recorded_window_is_set_entry:
+    forall b: book, inc seq digest sub: int, w: window.
+      0 <= inc && inc <= 1 -> window_of b inc = Some w ->
+      recorded_window b inc seq digest sub
+        = set_entry w seq { digest = digest; outcome = Pending sub }
+
+  lemma recorded_window_floor:
+    forall b: book, inc seq digest sub: int, w: window.
+      0 <= inc && inc <= 1 -> window_of b inc = Some w ->
+      (recorded_window b inc seq digest sub).floor = w.floor
+
+  lemma recorded_window_lookup:
+    forall b: book, inc seq digest sub: int.
+      0 <= seq && seq <= 1 ->
+      lookup (recorded_window b inc seq digest sub) seq
+        = Some { digest = digest; outcome = Pending sub }
+
+  lemma record_then_admit_is_duplicate:
+    forall b: book, inc seq digest sub: int, w w': window.
+      0 <= inc && inc <= 1 -> window_of b inc = Some w -> seq > w.floor ->
+      window_of (record b inc seq digest sub) inc = Some w' ->
+      lookup w' seq = Some { digest = digest; outcome = Pending sub } ->
+      w'.floor = w.floor ->
+      admit (record b inc seq digest sub) inc seq digest = Duplicate (Pending sub)
+
+  (* --- R6: the bounds are respected -------------------------------------- *)
+
+  lemma fresh_means_absent:
+    forall b: book, inc seq digest: int.
+      admit b inc seq digest = Fresh -> not (present b inc seq)
+
+  lemma fresh_respects_capacity:
+    forall b: book, inc seq digest: int.
+      wf b -> admit b inc seq digest = Fresh -> b.retained < b.capacity
+
+  lemma fresh_respects_incarnations:
+    forall b: book, inc seq digest: int.
+      wf b -> window_of b inc = None -> admit b inc seq digest = Fresh ->
+      live b < b.max_incarnations
+
+  (* --- R1: a record then replays as a duplicate -------------------------- *)
+
+  lemma record_counts_a_new_entry_once:
+    forall b: book, inc seq digest sub: int, w: window.
+      wf b -> 0 <= inc && inc <= 1 -> window_of b inc = Some w ->
+      lookup w seq = None ->
+      (record b inc seq digest sub).retained = b.retained + 1
+
+  lemma record_does_not_count_an_existing_entry:
+    forall b: book, inc seq digest sub: int, w: window.
+      wf b -> 0 <= inc && inc <= 1 -> window_of b inc = Some w ->
+      lookup w seq <> None ->
+      (record b inc seq digest sub).retained = b.retained
+
+  (* --- R4: a settle cannot invent a record ------------------------------- *)
+
+  lemma settle_without_a_record_changes_nothing:
+    forall b: book, inc seq: int, o: outcome.
+      0 <= inc && inc <= 1 -> not (present b inc seq) ->
+      settle b inc seq o = b
+
+  lemma settle_window_exists:
+    forall b: book, inc seq: int, o: outcome, w: window.
+      0 <= inc && inc <= 1 -> window_of b inc = Some w -> lookup w seq <> None ->
+      window_of (settle b inc seq o) inc <> None
+
+  lemma settle_lookup:
+    forall b: book, inc seq: int, o: outcome, w w': window, e: entry.
+      0 <= inc && inc <= 1 -> window_of b inc = Some w -> lookup w seq = Some e ->
+      window_of (settle b inc seq o) inc = Some w' ->
+      lookup w' seq = Some { e with outcome = o }
+
+  lemma settle_keeps_the_floor:
+    forall b: book, inc seq: int, o: outcome, w w': window.
+      0 <= inc && inc <= 1 -> window_of b inc = Some w ->
+      window_of (settle b inc seq o) inc = Some w' ->
+      w'.floor = w.floor
+
+  lemma settle_keeps_the_digest:
+    forall b: book, inc seq: int, o: outcome, w w': window, e: entry.
+      0 <= inc && inc <= 1 -> window_of b inc = Some w -> lookup w seq = Some e ->
+      window_of (settle b inc seq o) inc = Some w' ->
+      lookup w' seq = Some { e with outcome = o } ->
+      seq > w'.floor ->
+      admit (settle b inc seq o) inc seq e.digest = Duplicate o
+
+  (* --- R5: incarnations are separate namespaces -------------------------- *)
+
+  lemma record_leaves_another_incarnation_alone:
+    forall b: book, i j seq digest sub: int.
+      0 <= i && i <= 1 -> 0 <= j && j <= 1 -> i <> j ->
+      window_of (record b i seq digest sub) j = window_of b j
+
+  lemma another_incarnation_cannot_answer_a_retry:
+    forall b: book, i j seq digest: int, w: window.
+      0 <= i && i <= 1 -> 0 <= j && j <= 1 -> i <> j ->
+      wf b -> b.retained < b.capacity -> live b < b.max_incarnations ->
+      live b < b.max_scopes ->
+      window_of b j = Some w -> window_of b i = None ->
+      lookup w seq = Some { digest = digest; outcome = Pending 0 } ->
+      admit b i seq digest = Fresh
+
+  (* --- R3: acknowledgement moves the floor and refuses below it ---------- *)
+
+  lemma acknowledge_raises_the_floor:
+    forall b: book, inc through: int, w w': window.
+      0 <= inc && inc <= 1 -> window_of b inc = Some w ->
+      window_of (acknowledge b inc through) inc = Some w' ->
+      w'.floor >= w.floor && w'.floor >= through
+
+  lemma retry_after_acknowledge_is_refused:
+    forall b: book, inc through seq digest: int, w: window.
+      0 <= inc && inc <= 1 -> window_of b inc = Some w -> seq <= through ->
+      admit (acknowledge b inc through) inc seq digest
+        = BelowRetention (if through > w.floor then through else w.floor)
+
+end

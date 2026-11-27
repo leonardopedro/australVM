@@ -5776,9 +5776,94 @@ The histogram it exited with, 105 failed rows of 3975:
 | `emit ⏱ over 240 s` | 12 |
 | `mm0-c ✗ at sd1254: store overflow` | 1 |
 
-**The memory-bound classes hold `79` rows (`over 10 GiB` and `over 6 GiB`) and none has been
-re-measured**: `probe-10gib.log` holds no verdicts, so this section does not
-classify them.
+**The memory-bound rows re-measured alone at 20 G.** A sweep bound is not a
+verdict, so each of these rows — whichever bound it was recorded under — was
+compiled on its own: the artifact the sweep left behind, `mm0-rs compile` in a
+cgroup of `MemoryMax=20G` + `MemorySwapMax=4G`, a 1260 s cap (`probe-10gib.sh`):
+
+| declaration | bound it hit | `.mm1` bytes | verdict | wall | peak |
+| --- | ---: | ---: | --- | ---: | ---: |
+| `ConLeche.Model.admVal_kid` | 10 GiB | 383,463,584 | OOM-killed — **out of reach** | 532 s | — |
+| `ConLeche.Model.blk_ctorFit` | 10 GiB | 291,416,385 | closes at 20 G — **over budget** | 258 s | 10.6 GB |
+| `ConLeche.Model.blockFormerFacts_of` | 10 GiB | 583,185,590 | closes at 20 G — **over budget** | 482 s | 18.2 GB |
+| `ConLeche.Model.blockHoleCtx_canon` | 10 GiB | 408,633,662 | closes at 20 G — **over budget** | 370 s | 13.6 GB |
+| `ConLeche.Model.blockRunLink` | 10 GiB | 588,639,908 | closes at 20 G — **over budget** | 437 s | 19.8 GB |
+| `ConLeche.Model.blockTablesStage_of` | 10 GiB | 1,072,592,261 | OOM-killed — **out of reach** | 388 s | — |
+| `ConLeche.Model.callWalkSyn` | 10 GiB | 486,066,952 | OOM-killed — **out of reach** | 408 s | — |
+| `ConLeche.Model.divModClausesV_congr` | 10 GiB | 824,779,967 | OOM-killed — **out of reach** | 580 s | — |
+| `ConLeche.Model.dyn_ctorFit` | 10 GiB | 254,028,240 | closes at 20 G — **over budget** | 386 s | 15.4 GB |
+| `ConLeche.Model.dyn_nodeBlock` | 10 GiB | 325,514,105 | closes at 20 G — **over budget** | 259 s | 12.0 GB |
+| `ConLeche.Model.eqRecFit` | 10 GiB | 414,826,898 | closes at 20 G — **over budget** | 353 s | 17.6 GB |
+| `ConLeche.Model.eqRecLaw` | 10 GiB | 263,379,100 | closes at 20 G — **over budget** | 250 s | 13.9 GB |
+| `ConLeche.Model.frameAccOut_of` | 10 GiB | 296,725,774 | closes at 20 G — **over budget** | 259 s | 10.8 GB |
+| `ConLeche.Model.frameCtor_acc` | 10 GiB | 571,349,814 | closes at 20 G — **over budget** | 601 s | 20.0 GB |
+| `ConLeche.Model.genArgs_graded` | 10 GiB | 230,388,792 | OOM-killed — **out of reach** | 436 s | — |
+| `ConLeche.Model.genCall_data` | 10 GiB | 479,451,600 | OOM-killed — **out of reach** | 289 s | — |
+| `ConLeche.Model.genClsRd_mem` | 10 GiB | 319,177,221 | closes at 20 G — **over budget** | 442 s | 16.8 GB |
+| `ConLeche.Model.genCls_coreI` | 10 GiB | 301,079,647 | closes at 20 G — **over budget** | 404 s | 12.5 GB |
+| `ConLeche.Model.genCls_coreII` | 10 GiB | 325,432,092 | closes at 20 G — **over budget** | 278 s | 10.9 GB |
+| `ConLeche.Model.genCls_dec` | 10 GiB | 359,498,675 | closes at 20 G — **over budget** | 284 s | 14.0 GB |
+| `ConLeche.Model.genCls_open` | 10 GiB | 271,554,105 | closes at 20 G — **over budget** | 368 s | 16.7 GB |
+| `ConLeche.Model.genFit1_core` | 10 GiB | 521,400,891 | OOM-killed — **out of reach** | 323 s | — |
+| `ConLeche.Model.genFit2_core` | 10 GiB | 536,769,956 | OOM-killed — **out of reach** | 898 s | — |
+| `ConLeche.Model.genHstepG` | 10 GiB | 620,300,164 | OOM-killed — **out of reach** | 570 s | — |
+| `ConLeche.Model.genIhFree_run` | 10 GiB | 371,506,700 | OOM-killed — **out of reach** | 374 s | — |
+| `ConLeche.Model.genIhMot` | 10 GiB | 324,351,423 | OOM-killed — **out of reach** | 537 s | — |
+| `ConLeche.Model.genIhUnder` | 10 GiB | 309,565,468 | OOM-killed — **out of reach** | 347 s | — |
+| `ConLeche.Model.genMem_K` | 10 GiB | 295,935,565 | closes at 20 G — **over budget** | 259 s | 10.2 GB |
+| `ConLeche.Model.genMinorSetup` | 10 GiB | 450,403,739 | OOM-killed — **out of reach** | 438 s | — |
+| `ConLeche.Model.genMinorTower` | 10 GiB | 315,445,978 | OOM-killed — **out of reach** | 450 s | — |
+| `ConLeche.Model.genMinor_pt` | 10 GiB | 399,637,082 | OOM-killed — **out of reach** | 550 s | — |
+| `ConLeche.Model.genMotRds` | 10 GiB | 376,439,737 | OOM-killed — **out of reach** | 299 s | — |
+| `ConLeche.Model.genNodeFrameTie` | 10 GiB | 309,482,723 | closes at 20 G — **over budget** | 176 s | 10.3 GB |
+| `ConLeche.Model.genOutCtorFit` | 10 GiB | 275,284,370 | closes at 20 G — **over budget** | 195 s | 10.6 GB |
+| `ConLeche.Model.genOutCtorOwn` | 10 GiB | 405,288,612 | closes at 20 G — **over budget** | 493 s | 15.6 GB |
+| `ConLeche.Model.genOutCtorRefit` | 10 GiB | 302,866,798 | closes at 20 G — **over budget** | 259 s | 10.7 GB |
+| `ConLeche.Model.genOutExtra` | 10 GiB | 398,773,647 | closes at 20 G — **over budget** | 396 s | 14.2 GB |
+| `ConLeche.Model.genOut_T` | 10 GiB | 333,107,907 | closes at 20 G — **over budget** | 490 s | 17.6 GB |
+| `ConLeche.Model.genOut_pin` | 10 GiB | 287,417,628 | closes at 20 G — **over budget** | 415 s | 11.9 GB |
+| `ConLeche.Model.genOutsideClass_reachedNode` | 10 GiB | 360,408,186 | closes at 20 G — **over budget** | 242 s | 12.3 GB |
+| `ConLeche.Model.genParams_fit_run` | 10 GiB | 293,757,863 | closes at 20 G — **over budget** | 388 s | 11.8 GB |
+| `ConLeche.Model.genRecCtx_nodes` | 10 GiB | 652,076,512 | OOM-killed — **out of reach** | 320 s | — |
+| `ConLeche.Model.genRecEqs_wd` | 10 GiB | 641,893,590 | OOM-killed — **out of reach** | 565 s | — |
+| `ConLeche.Model.genRecHdataS` | 10 GiB | 279,953,982 | closes at 20 G — **over budget** | 1256 s | 19.3 GB |
+| `ConLeche.Model.genRecStage` | 10 GiB | 334,868,155 | closes at 20 G — **over budget** | 439 s | 15.7 GB |
+| `ConLeche.Model.genRhs` | 10 GiB | 270,499,536 | closes at 20 G — **over budget** | 205 s | 10.1 GB |
+| `ConLeche.Model.genRowParams` | 10 GiB | 246,347,141 | OOM-killed — **out of reach** | 389 s | — |
+| `ConLeche.Model.genRow_hstep` | 10 GiB | 304,069,804 | closes at 20 G — **over budget** | 1069 s | 11.2 GB |
+| `ConLeche.Model.genRows3_mem` | 10 GiB | 456,518,686 | OOM-killed — **out of reach** | 956 s | — |
+| `ConLeche.Model.genRows3_out` | 10 GiB | 325,249,613 | closes at 20 G — **over budget** | 488 s | 13.0 GB |
+| `ConLeche.Model.genRuleRaZ` | 10 GiB | 239,485,910 | closes at 20 G — **over budget** | 375 s | 15.4 GB |
+| `ConLeche.Model.genRule_shapeD` | 10 GiB | 317,691,865 | closes at 20 G — **over budget** | 171 s | 10.4 GB |
+| `ConLeche.Model.genRun_below` | 10 GiB | 328,100,716 | closes at 20 G — **over budget** | 554 s | 18.1 GB |
+| `ConLeche.Model.genRun_frame` | 10 GiB | 226,547,420 | closes at 20 G — **over budget** | 275 s | 11.8 GB |
+| `ConLeche.Model.harvestDefn` | 6 GiB | 208,396,756 | closes at 20 G — **over budget** | 125 s | 7.2 GB |
+| `ConLeche.Model.instCtor_read` | 6 GiB | 189,219,435 | closes at 20 G — **over budget** | 138 s | 6.9 GB |
+| `ConLeche.Model.natOpRow_of` | 6 GiB | 227,243,171 | closes at 20 G — **over budget** | 109 s | 7.2 GB |
+| `ConLeche.Model.natOpV_beq` | 6 GiB | 146,544,525 | closes at 20 G — **over budget** | 151 s | 6.4 GB |
+| `ConLeche.Model.natOps_install` | 6 GiB | 559,949,512 | OOM-killed — **out of reach** | 375 s | — |
+| `ConLeche.Model.param_read_eq` | 6 GiB | 188,472,028 | closes at 20 G — **over budget** | 204 s | 6.6 GB |
+| `ConLeche.Model.pinnedStructT_congr` | 6 GiB | 228,404,668 | closes at 20 G — **over budget** | 120 s | 7.3 GB |
+| `ConLeche.Model.quotIndFit` | 6 GiB | 370,601,760 | closes at 20 G — **over budget** | 343 s | 18.3 GB |
+| `ConLeche.Model.quotIndLaw` | 6 GiB | 213,097,820 | closes at 20 G — **over budget** | 180 s | 8.9 GB |
+| `ConLeche.Model.quotLiftExtra` | 6 GiB | 208,726,809 | closes at 20 G — **over budget** | 138 s | 6.6 GB |
+| `ConLeche.Model.quotLiftFit` | 6 GiB | 434,534,448 | OOM-killed — **out of reach** | 420 s | — |
+| `ConLeche.Model.quotLiftLaw` | 6 GiB | 406,847,186 | OOM-killed — **out of reach** | 378 s | — |
+| `ConLeche.Model.recRuleLaw_stored` | 6 GiB | 183,950,588 | closes at 20 G — **over budget** | 285 s | 13.0 GB |
+| `ConLeche.Model.recStagePinsOk` | 6 GiB | 355,864,053 | closes at 20 G — **over budget** | 418 s | 12.3 GB |
+| `ConLeche.Model.recStage_of_gen` | 6 GiB | 266,832,042 | closes at 20 G — **over budget** | 236 s | 11.2 GB |
+| `ConLeche.Model.stageBlockCtorsAt` | 6 GiB | 174,176,882 | closes at 20 G — **over budget** | 179 s | 7.4 GB |
+| `ConLeche.Model.stageFixTable` | 6 GiB | 861,539,946 | OOM-killed — **out of reach** | 487 s | — |
+| `ConLeche.Model.storedFieldShapes_of_walk` | 6 GiB | 632,311,653 | OOM-killed — **out of reach** | 497 s | — |
+| `ConLeche.Model.storedMajorSub_ctx` | 6 GiB | 186,486,411 | closes at 20 G — **over budget** | 130 s | 6.8 GB |
+| `ConLeche.Model.storedSwap_sem` | 6 GiB | 244,347,950 | closes at 20 G — **over budget** | 166 s | 8.9 GB |
+| `ConLeche.Model.sumCtorData_of` | 6 GiB | 624,832,026 | OOM-killed — **out of reach** | 336 s | — |
+| `ConLeche.Model.tgtNodePres_of_list` | 6 GiB | 482,280,778 | closes at 20 G — **over budget** | 493 s | 16.9 GB |
+| `ConLeche.Model.trueVal_frameApp` | 6 GiB | 226,473,087 | closes at 20 G — **over budget** | 211 s | 8.1 GB |
+| `ConLeche.Model.EnvModelM.renameCore` | 10 GiB | 251,444,344 | closes at 20 G — **over budget** | 373 s | 17.1 GB |
+| `ConLeche.Model.targetAbs_read._f` | 6 GiB | 199,175,683 | closes at 20 G — **over budget** | 96 s | 8.2 GB |
+
+79 re-measured; **53 close** at 20 G, so for them the `10 GiB`, `6 GiB` bound was the limit: those rows are over that budget, not out of reach; **26 are killed** by the cgroup at 20 G + 4 G of swap, which is the whole margin on this 30 GB host, so no bound below its ceiling closes them: out of reach.
 <!-- 13.62c-sweep:end -->
 
 **Six runs, joined by declaration.** The block above is a union, not one run. The sweep that
