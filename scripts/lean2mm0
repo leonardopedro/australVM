@@ -378,28 +378,45 @@ IE_RE = re.compile(rb'"ie":(\d+)')
 
 
 class Export:
-    def __init__(self, path: Path, lazy: bool = False):
+    def __init__(self, path: Path, lazy: bool = False,
+                 compute_sha: bool = True):
         self.names: dict[int, str] = {}
         self.levels: dict[int, dict] = {}
         self.decls: dict[str, tuple[str, dict, int]] = {}
         self.ctors: dict[str, CtorInfo] = {}
         self.recs: dict[str, RecInfo] = {}
+        # Every exported inductive block, keyed the way the readers ask for it:
+        # `ind_decls` by the inductive type's qualified name (the record itself),
+        # `ind_types` by the qualified name of each type, constructor and
+        # recursor (its `type` expression id). The typing emitter needs both and
+        # used to re-scan the whole export for them, once per declaration; they
+        # are a by-product of the parse this constructor already does.
+        self.ind_decls: dict[str, dict] = {}
+        self.ind_types: dict[str, int] = {}
         self.inductive_names: set[str] = set()
         self._spine_cache: dict[int, tuple] = {}
         self._pending_inductives: list[dict] = []
-        self.sha256 = file_sha256(path)
+        # 507 MB of SHA-256 over the export is a second and a half per process,
+        # and only the statement translator puts the digest in a header. Everything
+        # else passes `compute_sha=False` and leaves this empty.
+        self.sha256 = file_sha256(path) if compute_sha else ""
         # `lazy` keeps expression records on disk: the statement translator
         # walks an export end to end and wants them all, the typing emitter
         # wants one declaration's reachable subgraph.
         self.exprs: dict[int, dict] | LazyExprs = LazyExprs(path) if lazy else {}
         with path.open("rb") as fh:
             i = -1
+            # The offset is counted, not asked for: `fh.tell()` on a buffered
+            # reader is a Python-level call per line, and the export is 9.36 M
+            # lines (3.1 s of `tell` on a full ConLeche export). In binary mode
+            # `len(raw)` is exactly what `tell()` would report.
+            off = 0
             while True:
-                off = fh.tell()
                 raw = fh.readline()
                 if not raw:
                     break
                 i += 1
+                this_off, off = off, off + len(raw)
                 if raw.isspace():
                     continue
                 if lazy:
@@ -411,7 +428,7 @@ class Export:
                         # (`{"app":{…},"ie":7}`) and first only on `sort` and
                         # `lam`, so it is found by `rfind`, not by prefix, and
                         # it is a number only at the top level of the record.
-                        self.exprs.add(int(m.group(1)), off)
+                        self.exprs.add(int(m.group(1)), this_off)
                         continue
                 d = json.loads(raw)
                 if "in" in d:
@@ -463,7 +480,12 @@ class Export:
         for t in types:
             # type names in value position are type arguments: never evaluated
             self.inductive_names.add(Export.canon(self.name(t["name"])))
+            self.ind_decls[self.name(t["name"])] = ind
+            if "type" in t:
+                self.ind_types[self.name(t["name"])] = t["type"]
         for c in ind.get("ctors", []):
+            if "type" in c:
+                self.ind_types[self.name(c["name"])] = c["type"]
             nm = Export.canon(self.name(c["name"]))
             self.ctors[nm] = CtorInfo(
                 induct=types[0]["name"], cidx=c["cidx"],
@@ -474,6 +496,8 @@ class Export:
         for c in ind.get("ctors", []):
             by_cidx[c["cidx"]] = Export.canon(self.name(c["name"]))
         for r in ind.get("recs", []):
+            if "type" in r:
+                self.ind_types[self.name(r["name"])] = r["type"]
             nm = Export.canon(self.name(r["name"]))
             self.recs[nm] = RecInfo(
                 num_params=r["numParams"], num_motives=r["numMotives"],

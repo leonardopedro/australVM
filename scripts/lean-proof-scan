@@ -43,12 +43,16 @@ in scope could be verified.
 from __future__ import annotations
 
 import collections
+import contextlib
+import fcntl
 import hashlib
+import io
 import importlib.machinery
 import importlib.util
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -145,6 +149,11 @@ def mm0_c_verdict(err: Path, cap: int = MM0_C_READ_CAP) -> str:
             read += len(chunk)
             # A `\n\n` may straddle the chunk boundary; one byte carries it.
             buf = buf[-1:] + chunk
+
+
+# `sorry` as a *verdict*, not as a substring: `"sorry" in stdout + stderr` also
+# fired on a declaration whose name contains it (§14.1, item 5).
+_SORRY = re.compile(r"\b(contains|uses) sorry\b")
 
 
 def mm0_c_reason(err: Path, out: Path) -> str:
@@ -273,6 +282,101 @@ GOAL_MARK = "-- ── the derivation ──\n"
 STATED_MARK = "-- ── the statement, proved\n"
 
 
+def _offset_after(fh, marker: bytes) -> int:
+    """Offset just past the first `marker` in binary `fh`, from its position.
+
+    Scanned in 1 MiB blocks with a marker-length overlap, so a 1 GiB artifact is
+    located without being held: the whole point of the streaming assembly below
+    is that no stage of a declaration costs its size in RAM.
+    """
+    keep = len(marker) - 1
+    # `base` is the offset of the byte *after* the last block read, and `tail`
+    # is what is carried into the next block, so `buf` starts at
+    # `base - len(tail)`. Forgetting that subtraction is a silent
+    # `len(marker) - 1` byte error into the artifact — measured as a retained
+    # statement 30 bytes short of its goal band.
+    base = fh.tell()
+    tail = b""
+    while True:
+        chunk = fh.read(1 << 20)
+        if not chunk:
+            raise ValueError(f"marker {marker[:40]!r} not found")
+        buf = tail + chunk
+        i = buf.find(marker)
+        if i >= 0:
+            # Seek, do not merely return: the block read that found the marker
+            # ran past it, and a caller that starts reading from the stream's
+            # *current* position would then skip the band it asked for.
+            end = base - len(tail) + i + len(marker)
+            fh.seek(end)
+            return end
+        base += len(chunk)
+        tail = buf[-keep:] if keep > 0 else b""
+
+
+def _copy_n(src, dst, n: int) -> None:
+    """Copy exactly `n` bytes between two binary streams."""
+    while n > 0:
+        b = src.read(min(1 << 20, n))
+        if not b:
+            raise ValueError("unexpected end of file")
+        dst.write(b)
+        n -= len(b)
+
+
+def _file_sha256(path: Path) -> str:
+    """sha256 of a file, in chunks — the derivation can be hundreds of MB."""
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _file_startswith(path: Path, prefix: str) -> bool:
+    """Whether `path` begins with `prefix`, comparing only that many bytes."""
+    want = prefix.encode()
+    with path.open("rb") as fh:
+        head = fh.read(len(want) + 1)
+    return head.startswith(want)
+
+
+def statement_digest_file(path: Path) -> str:
+    """`statement_digest` of a file, hashed from the goal marker to its end."""
+    with path.open("rb") as fh:
+        _offset_after(fh, GOAL_MARK.encode())
+        h = hashlib.sha256()
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def prepend_file(prefix: str, src: Path, dst: Path) -> None:
+    """`dst` = `prefix` + `src`, streaming: neither side is ever held whole.
+
+    The old form was `dst.write_text(prefix + src.read_text())`, which held the
+    typing artifact, the copy and the result at once — 4× the artifact's size of
+    Python strings, on artifacts that reach 1 GB.
+    """
+    with dst.open("w") as out, src.open("r") as fh:
+        out.write(prefix)
+        shutil.copyfileobj(fh, out, 1 << 20)
+
+
+def header_fields(path: Path) -> tuple[int, int]:
+    """`(rules, assumptions)` from an artifact's header, without reading it all.
+
+    The counts are in the first lines the emitter writes, and the file they sit
+    in is the whole artifact: `read_text()` of it cost 243 MB of RAM to read two
+    integers (§14.1, item 5).
+    """
+    with path.open("r", errors="replace") as fh:
+        head = fh.read(1 << 20)
+    rules = int(re.search(r"Rules applied : (\d+)", head).group(1))
+    axs = int(re.search(r"Assumptions   : (\d+)", head).group(1))
+    return rules, axs
+
+
 def slug(nm: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.]", "_", nm).strip("_")
 
@@ -344,20 +448,24 @@ def statement_of_text(text: str) -> str:
     """
     head = text[:text.index("-- ── assumptions ──")]
     goal = text[text.index(GOAL_MARK[:-1]):]
-    state = ("-- State         : PROVED — `mm0-rs compile` and `mm0-c` accepted "
-             "the derivation of this\n"
-             "--                 statement; the derivation itself was discarded "
-             "after verification\n"
-             "--                 (its sha256 and size are in the ledger's "
-             "index.tsv).\n"
-             "-- As an `.mm0` file this is a bare statement, and `mm0-rs` will "
-             "report it as\n"
-             "-- `sorry`: the proof is not here, and nothing in MM0 lets one "
-             "file cite\n"
-             "-- another's proof. The ledger is what says this statement was "
-             "derived.\n")
     goal = goal.replace(GOAL_MARK[:-1], STATED_MARK[:-1], 1)
-    return head + state + goal
+    return head + statement_state() + goal
+
+
+def statement_state() -> str:
+    """The prose a retained statement carries in place of its derivation."""
+    return ("-- State         : PROVED — `mm0-rs compile` and `mm0-c` accepted "
+            "the derivation of this\n"
+            "--                 statement; the derivation itself was discarded "
+            "after verification\n"
+            "--                 (its sha256 and size are in the ledger's "
+            "index.tsv).\n"
+            "-- As an `.mm0` file this is a bare statement, and `mm0-rs` will "
+            "report it as\n"
+            "-- `sorry`: the proof is not here, and nothing in MM0 lets one "
+            "file cite\n"
+            "-- another's proof. The ledger is what says this statement was "
+            "derived.\n")
 
 
 def ledger_append_failure(root: Path, export_tag: str, theory_sha: str,
@@ -375,21 +483,61 @@ def ledger_append_failure(root: Path, export_tag: str, theory_sha: str,
     index = root / "index.tsv"
     fresh = not index.exists()
     with index.open("a") as fh:
-        if fresh:
-            fh.write("# " + "\t".join(LEDGER_COLUMNS) + "\n")
-        row = dict.fromkeys(LEDGER_COLUMNS, "")
-        row.update(export=export_tag, theory=theory_sha, mode=mode,
-                   declaration=name, kind=kind, rules="0", assumptions="0")
-        row.update(verdict="failed", reason=one_line(reason),
-                   verified_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
-        fh.write("\t".join(row[col] for col in LEDGER_COLUMNS) + "\n")
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            if fresh:
+                fh.write("# " + "\t".join(LEDGER_COLUMNS) + "\n")
+            row = dict.fromkeys(LEDGER_COLUMNS, "")
+            row.update(export=export_tag, theory=theory_sha, mode=mode,
+                       declaration=name, kind=kind, rules="0", assumptions="0")
+            row.update(verdict="failed", reason=one_line(reason),
+                       verified_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
+            fh.write("\t".join(row[col] for col in LEDGER_COLUMNS) + "\n")
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def one_line(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def ledger_append(root: Path, full0_text: str, export_tag: str, theory_sha: str,
+def statement_copy(src: Path, dst: Path) -> str:
+    """Write `statement_of_text(read_text(src))` to `dst`, in chunks.
+
+    Same bytes as the in-memory form: the head up to the assumptions band, the
+    state prose, then the goal band relabelled. The digest is of the goal band
+    as the *unrelabelled* artifact states it, which is what
+    `lean-typing-proof --digest` computes from a fresh export.
+
+    Returns the statement digest.
+    """
+    # Encoded, not written as bytes literals: the markers carry box-drawing
+    # characters, which a `b"…"` literal cannot hold.
+    assum = "-- ── assumptions ──".encode()
+    side = GOAL_MARK[:-1].encode()
+    with src.open("rb") as fh, dst.open("wb") as out:
+        # Both offsets are found from the start of the file: a marker scan
+        # consumes what it read, so the second quest cannot continue from the
+        # first one's position (measured: the goal marker after the assumptions
+        # band was not found on a 12 KB artifact).
+        head_end = _offset_after(fh, assum) - len(assum)
+        fh.seek(0)
+        goal_at = _offset_after(fh, side) - len(side)
+        fh.seek(0)
+        _copy_n(fh, out, head_end)
+        out.write(statement_state().encode())
+        out.write(STATED_MARK[:-1].encode())
+        fh.seek(goal_at + len(side))
+        # The marker's own newline, which the digest band starts after.
+        out.write(fh.read(1))
+        h = hashlib.sha256()
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            out.write(chunk)
+            h.update(chunk)
+        return h.hexdigest()
+
+
+def ledger_append(root: Path, full0: Path, export_tag: str, theory_sha: str,
                   mode: str, name: str, kind: str, rules: int, axs: int,
                   deriv_sha: str, deriv_bytes: int) -> Path:
     """Register one verified statement and keep the statement itself.
@@ -397,25 +545,34 @@ def ledger_append(root: Path, full0_text: str, export_tag: str, theory_sha: str,
     The retained file is content-addressed (`stmt/<digest>/`): the same statement
     proved for two exports is one file, and a row's statement is findable from
     the row without a second column saying where it went.
+
+    Streamed from `full0`: the statement's text is written where it goes rather
+    than built here, so a 1 GB artifact costs the copy's buffer and no more.
     """
-    # The digest is taken before the retained copy is written: the retained
-    # copy relabels the derivation marker, and the digest has to agree with
-    # what `lean-typing-proof --digest` computes from a fresh export.
-    digest = statement_digest(full0_text)
-    text = statement_of_text(full0_text)
+    root.mkdir(parents=True, exist_ok=True)
+    tmp = root / "stmt" / f".tmp-{os.getpid()}-{slug(name)}"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    digest = statement_copy(full0, tmp)
     dest = root / "stmt" / digest[:12]
     dest.mkdir(parents=True, exist_ok=True)
     path = dest / (slug(name) + ".mm0")
-    path.write_text(text)
+    tmp.replace(path)
     index = root / "index.tsv"
     fresh = not index.exists()
     with index.open("a") as fh:
-        if fresh:
-            fh.write("# " + "\t".join(LEDGER_COLUMNS) + "\n")
-        fh.write("\t".join(str(v) for v in (
-            export_tag, theory_sha, mode, name, kind, rules, axs,
-            path.stat().st_size, digest, deriv_sha, deriv_bytes,
-            time.strftime("%Y-%m-%dT%H:%M:%S"), "pass", "")) + "\n")
+        # Sharded scans append to one ledger: an unlocked append interleaved a
+        # header with a row and lost both, which is why the sweep's own rows are
+        # written under an exclusive lock.
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            if fresh:
+                fh.write("# " + "\t".join(LEDGER_COLUMNS) + "\n")
+            fh.write("\t".join(str(v) for v in (
+                export_tag, theory_sha, mode, name, kind, rules, axs,
+                path.stat().st_size, digest, deriv_sha, deriv_bytes,
+                time.strftime("%Y-%m-%dT%H:%M:%S"), "pass", "")) + "\n")
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
     return path
 
 
@@ -498,7 +655,7 @@ def reread_ok(full0: Path, full1: Path, mmb: Path) -> str | None:
         return f"mm0-rs: over {MM0_RS_TIMEOUT} s"
     if c.returncode in (-6, -9) or "memory allocation" in (c.stdout + c.stderr):
         return f"mm0-rs: over {bound_gb(MM0_RS_MEM_GB)} GiB"
-    if c.returncode != 0 or "sorry" in (c.stdout + c.stderr):
+    if c.returncode != 0 or _SORRY.search(c.stdout + c.stderr):
         return "mm0-rs: " + last_meaningful(c.stdout + c.stderr)
     with full0.open() as fh:
         k = run([MM0_C, str(mmb)], stdin=fh)
@@ -546,14 +703,17 @@ def adopt(root: Path, memo_root: Path, prefix_text: str, theory_sha: str,
     reasons: collections.Counter[str] = collections.Counter()
     t0 = time.time()
     for full0 in pairs:
-        text = full0.read_text()
-        m = re.search(r"^-- Declaration\s*: (\S+) \[(\w+)\]", text, re.M)
+        # Read the header, not the artifact: the header is at the top and the
+        # artifact can be a gigabyte (§14.1, item 5).
+        with full0.open("r", errors="replace") as fh:
+            head = fh.read(1 << 20)
+        m = re.search(r"^-- Declaration\s*: (\S+) \[(\w+)\]", head, re.M)
         if m is None:
             reasons["no `-- Declaration` header"] += 1
             continue
         name, kind = m.group(1), m.group(2)
         short = name.split(".")[-1]
-        if not text.startswith(prefix_text):
+        if not _file_startswith(full0, prefix_text):
             reasons["theory prefix is not docs/cic*.mm0"] += 1
             print(f"  adopt ✗ {short}: theory prefix is not docs/cic*.mm0")
             continue
@@ -562,22 +722,20 @@ def adopt(root: Path, memo_root: Path, prefix_text: str, theory_sha: str,
             reasons["no .mm1: its proof was discarded already"] += 1
             continue
         why = reread_ok(full0, full1, full0.with_name("full.mmb"))
-        digest = statement_digest(text)
+        digest = statement_digest_file(full0)
         if why is not None:
             reasons[classify(why)] += 1
             print(f"  adopt ✗ {short}: {why[:110]}")
             continue
-        rules = int(re.search(r"^-- Rules applied : (\d+)", text, re.M).group(1))
-        axs = int(re.search(r"^-- Assumptions   : (\d+)", text, re.M).group(1))
+        rules = int(re.search(r"^-- Rules applied : (\d+)", head, re.M).group(1))
+        axs = int(re.search(r"^-- Assumptions   : (\d+)", head, re.M).group(1))
         if digest in have:
             already += 1
             if not keep_proofs:
                 discard_proofs(full0.parent)
             continue
-        ledger_append(memo_root, text, "-", theory_sha, mode_tag, name, kind,
-                      rules, axs,
-                      hashlib.sha256(full1.read_bytes()).hexdigest(),
-                      full1.stat().st_size)
+        ledger_append(memo_root, full0, "-", theory_sha, mode_tag, name, kind,
+                      rules, axs, _file_sha256(full1), full1.stat().st_size)
         have.add(digest)
         registered += 1
         print(f"  adopt ✓ {short} [{kind}] rules={rules} assumptions={axs}"
@@ -592,28 +750,154 @@ def adopt(root: Path, memo_root: Path, prefix_text: str, theory_sha: str,
     print()
 
 
-def digest_of(name: str, export_path: Path, out: Path) -> str | None:
-    """The statement digest of one declaration, from the export alone.
+_LTP = None
 
-    One `--digest` run costs what asking the export a question costs — the
-    index and the encodes — and not what proving the answer costs. `None` when
-    that run did not finish: the caller then emits as usual and the sweep's own
-    budgets report the declaration.
+
+def emitter_module():
+    """`scripts/lean-typing-proof` as a module, so a declaration can be run here.
+
+    The scan indexes the export once and then asks for one declaration at a
+    time. As a subprocess each ask re-indexed the export — 9.36 M lines, ~8 s —
+    which over a 3 975-declaration scope is the whole of the sweep's startup
+    cost (§14.2). In this process the index is already built.
     """
+    global _LTP
+    if _LTP is None:
+        loader = importlib.machinery.SourceFileLoader(
+            "lean_typing_proof", str(EMITTER))
+        spec = importlib.util.spec_from_loader("lean_typing_proof", loader)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["lean_typing_proof"] = mod
+        loader.exec_module(mod)
+        _LTP = mod
+    return _LTP
+
+
+def _close_lazy_fh(ex) -> None:
+    """Drop the export's shared reader before a fork.
+
+    `LazyExprs` seeks one file handle per record. A forked child shares the
+    *offset* of that descriptor with its parent, so two processes reading
+    through it read each other's bytes; closing it first makes each side open
+    its own on the next miss (§14.2).
+    """
+    fh = getattr(ex.exprs, "_fh", None)
+    if fh is not None:
+        fh.close()
+        ex.exprs._fh = None
+
+
+class EmitResult:
+    """The small part of a `CompletedProcess` the caller reads."""
+
+    __slots__ = ("returncode", "stdout", "stderr")
+
+    def __init__(self, returncode: int, stdout: str = "", stderr: str = ""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def emit_forked(ex, export_path: Path, nm: str, out: Path, *,
+                defer: bool, keep_proofs: bool) -> EmitResult:
+    """Emit one declaration in a forked child of this process.
+
+    A fork, not an `exec`: the child inherits the export index its parent built,
+    so the cost of an emit is the derivation and nothing else. It is still a
+    separate process, because the two things a bound is for — a crash and a
+    memory blow-up — have to be the child's, not the sweep's.
+
+    `RLIMIT_AS` is set to the child's own address space *plus* the budget: a
+    forked child carries the parent's mappings, so a bare `cap` would charge the
+    export index against the derivation (§14.2).
+    """
+    ltp = emitter_module()
     out.mkdir(parents=True, exist_ok=True)
+    so, se = out / ".emit.out", out / ".emit.err"
+    # Flush before forking: the child inherits these buffers, and would write
+    # the parent's pending lines into its own transcript.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    _close_lazy_fh(ex)
+    pid = os.fork()
+    if pid == 0:                                          # child
+        code = 1
+        try:
+            for stream, path in ((1, so), (2, se)):
+                fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                             0o644)
+                os.dup2(fd, stream)
+                os.close(fd)
+            sys.stdout = os.fdopen(1, "w", buffering=1, closefd=False)
+            sys.stderr = os.fdopen(2, "w", buffering=1, closefd=False)
+            import resource
+            with open("/proc/self/status") as fh:
+                vsz = next(int(line.split()[1]) * 1024 for line in fh
+                           if line.startswith("VmSize:"))
+            lim = vsz + EMIT_MEM_GB * 1024 ** 3
+            resource.setrlimit(resource.RLIMIT_AS, (lim, lim))
+            code = ltp.run_one(ex, export_path, nm, out, spine=True, defer=defer,
+                               no_obligations=not keep_proofs)
+        except BaseException:
+            import traceback
+            traceback.print_exc()
+            code = 1
+        finally:
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+            except BaseException:
+                pass
+            os._exit(code if isinstance(code, int) else 1)
+    deadline = time.monotonic() + EMIT_TIMEOUT
+    while True:
+        wpid, status = os.waitpid(pid, os.WNOHANG)
+        if wpid == pid:
+            break
+        if time.monotonic() >= deadline:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os.waitpid(pid, 0)
+            return EmitResult(124)
+        time.sleep(0.02)
+    # `waitstatus_to_exitcode` gives the same negative codes a shell reports:
+    # `-9` for a kill, `-6` for the abort an `RLIMIT_AS` refusal raises.
+    rc = os.waitstatus_to_exitcode(status)
+    return EmitResult(rc, so.read_text(errors="replace") if so.exists() else "",
+                      se.read_text(errors="replace") if se.exists() else "")
+
+
+def digest_of(ex, export_path: Path, name: str, out: Path) -> str | None:
+    """The statement digest of one declaration, in this process.
+
+    One `--digest` call costs what asking the export a question costs — the
+    encodes, not the proof — and the index is the one the scan already built.
+    `None` when the call did not finish: the caller then emits as usual and the
+    sweep's own budgets report the declaration.
+    """
+    ltp = emitter_module()
+    out.mkdir(parents=True, exist_ok=True)
+    buf = io.StringIO()
     try:
-        r = run([str(EMITTER), str(export_path), name, str(out), "--spine",
-                 "--digest"], timeout=EMIT_TIMEOUT, preexec_fn=cap_mem(EMIT_MEM_GB))
-    except subprocess.TimeoutExpired:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            rc = ltp.run_one(ex, export_path, name, out, spine=True, digest=True)
+    except BaseException:
+        rc = 1
+    finally:
+        # A digest leaves nothing behind — not the spools it wrote, and not the
+        # directory it wrote them in: an audit over the namespace used to leave
+        # 3 966 directories, and a run that died mid-spool left 7.2 GB in one.
+        shutil.rmtree(out, ignore_errors=True)
+    if rc != 0:
         return None
-    if r.returncode != 0:
-        return None
-    m = re.search(r"^digest\s*: ([0-9a-f]{64})$", r.stdout, re.M)
+    m = re.search(r"^digest\s*: ([0-9a-f]{64})$", buf.getvalue(), re.M)
     return m.group(1) if m else None
 
 
-def audit_statements(scope, export_path: Path, work: Path, ledger, theory_sha: str,
-                     prefix: str) -> int:
+def audit_statements(ex, scope, export_path: Path, work: Path, ledger,
+                     theory_sha: str, prefix: str) -> int:
     """The re-export question over a whole scope, without emitting or checking.
 
     For every declaration it asks the emitter what *this* export states
@@ -621,12 +905,10 @@ def audit_statements(scope, export_path: Path, work: Path, ledger, theory_sha: s
     ledger's statement index. A hit is what a re-export would use to carry a
     verdict over instead of re-proving it; a miss is either a statement the
     ledger has not proved or one it proved as different bytes, and those are
-    reported apart. Neither checker runs, so a declaration costs the export
-    index and nothing else — measured 9.5 s / 487 MB, which is why the scope is
-    walked by several at a time (`SCAN_AUDIT_JOBS`, default 4).
+    reported apart. Neither checker runs, so a declaration costs the encodes
+    and nothing else: measured 9.5 s / 487 MB as a subprocess per declaration
+    and 0.3 s in this process, because the export index is the scan's own (§14.2).
     """
-    from concurrent.futures import ThreadPoolExecutor
-    jobs = max(1, int(os.environ.get("SCAN_AUDIT_JOBS", "4")))
     index: dict[str, list[dict[str, str]]] = collections.defaultdict(list)
     own: dict[str, list[dict[str, str]]] = collections.defaultdict(list)
     for r in ledger.values():
@@ -636,34 +918,30 @@ def audit_statements(scope, export_path: Path, work: Path, ledger, theory_sha: s
         if r["statement_sha256"]:
             index[r["statement_sha256"]].append(r)
 
-    def one(item):
-        nm, _kind = item
-        return digest_of(nm, export_path, work / slug(nm))
-
     verdicts: collections.Counter = collections.Counter()
     rows = ["declaration\tdigest\tverdict\tmatch"]
-    print(f"audit  : {len(scope)} declarations, {jobs} at a time, "
+    print(f"audit  : {len(scope)} declarations, in this process, "
           f"{len(index)} statement key(s) in the ledger", flush=True)
-    with ThreadPoolExecutor(jobs) as pool:
-        for (nm, kind), dg in zip(scope, pool.map(one, scope)):
-            short = nm[len(prefix):] if nm.startswith(prefix) else nm
-            hit = dg and [r for r in index[dg] if r["kind"] == kind]
-            if dg is None:
-                verdict, match = "digest unavailable", ""
-            elif hit:
-                m = hit[0]
-                verdict = "same statement"
-                match = f"{m['declaration']} of export {m['export'][:12]}"
-                verdicts["own row" if m["declaration"] == nm
-                        else "another declaration"] += 1
-                print(f"  audit ✓ {short} [{kind}] same statement as {match}",
-                      flush=True)
-            elif any(r["statement_sha256"] for r in own.get(nm, ())):
-                verdict, match = "statement differs", ""
-            else:
-                verdict, match = "no ledger row", ""
-            verdicts[verdict] += 1
-            rows.append(f"{nm}\t{dg or ''}\t{verdict}\t{match}")
+    for nm, kind in scope:
+        dg = digest_of(ex, export_path, nm, work / slug(nm))
+        short = nm[len(prefix):] if nm.startswith(prefix) else nm
+        hit = dg and [r for r in index[dg] if r["kind"] == kind]
+        if dg is None:
+            verdict, match = "digest unavailable", ""
+        elif hit:
+            m = hit[0]
+            verdict = "same statement"
+            match = f"{m['declaration']} of export {m['export'][:12]}"
+            verdicts["own row" if m["declaration"] == nm
+                    else "another declaration"] += 1
+            print(f"  audit ✓ {short} [{kind}] same statement as {match}",
+                  flush=True)
+        elif any(r["statement_sha256"] for r in own.get(nm, ())):
+            verdict, match = "statement differs", ""
+        else:
+            verdict, match = "no ledger row", ""
+        verdicts[verdict] += 1
+        rows.append(f"{nm}\t{dg or ''}\t{verdict}\t{match}")
     tsv = work / "statements.tsv"
     tsv.write_text("\n".join(rows) + "\n")
     total = len(scope)
@@ -715,6 +993,13 @@ def main() -> int:
     # failed row is not a hit and the declaration is measured again next run —
     # which is the point after a fix, and a 10 GiB row costs minutes.
     record_failures = "--record-failures" in sys.argv
+    # `--keep-failed`: keep a failed declaration's work directory for reading.
+    # Off, because a sweep that fails hundreds of rows left ~17 GB behind.
+    keep_failed = "--keep-failed" in sys.argv
+    # `--subprocess-emit`: one emitter process per declaration, as every scan
+    # before §14.2 did. Kept for debugging a fork, not for the sweep: it pays
+    # the export index per declaration.
+    subprocess_emit = "--subprocess-emit" in sys.argv
     # `--only=FILE`: restrict the scope to names listed one per line. A chapter
     # export carries its whole dependency closure, in which the chapter's own
     # declarations are a few dozen out of tens of thousands, so a sample drawn
@@ -740,7 +1025,11 @@ def main() -> int:
             raise SystemExit("--rekey needs --memo=DIR: it repairs a ledger")
         return ledger_rekey(Path(memo_arg))
     export_path, prefix, work = Path(argv[0]), argv[1], Path(argv[2])
-    extra = ["--spine"] + (["--defer-subst"] if defer else [])
+    # `--keep-proofs` is the only caller that ever reads the certificate stream,
+    # and the scan deletes it after every declaration otherwise: not writing it
+    # removes 200 MB–3.6 GB of disk and a fifth of the emit's wall clock (§14.1).
+    extra = (["--spine"] + (["--defer-subst"] if defer else [])
+             + ([] if keep_proofs else ["--no-obligations"]))
     ledger: dict[tuple[str, str], dict[str, str]] | None
     if memo_arg == "off" or "--no-memo" in sys.argv:
         ledger = None
@@ -808,7 +1097,7 @@ def main() -> int:
     if "--audit-statements" in sys.argv:
         if ledger is None:
             raise SystemExit("--audit-statements needs a ledger: drop --no-memo")
-        audit_statements(scope, export_path, work, ledger, theory_sha, prefix)
+        audit_statements(ex, scope, export_path, work, ledger, theory_sha, prefix)
         return 0
 
     closed: list[tuple[str, str, int, int]] = []
@@ -828,6 +1117,21 @@ def main() -> int:
     known_names = {n for (_e, t, _m, n), r in (ledger or {}).items()
                    if t == theory_sha and n.startswith(prefix) and proved(r)}
 
+    def record_failure(short: str, reason: str, out: Path) -> None:
+        """Count a failed row, write it to the ledger now, and drop its work.
+
+        `--record-failures` used to flush at process exit, so an interrupted
+        sweep lost every failure it had measured — the rows cost minutes each
+        and were the whole point of the run (§14.1, item 5).
+        """
+        failed.append((short, reason))
+        if record_failures and memo_root is not None and ledger is not None:
+            fnm, fkind = names[short]
+            ledger_append_failure(memo_root, ex.sha256, theory_sha, mode_tag,
+                                  fnm, fkind, reason)
+        if not keep_failed:
+            shutil.rmtree(out, ignore_errors=True)
+
     for nm, kind in scope:
         short = nm[len(prefix):] if nm.startswith(prefix) else nm
         # Already proved, for exactly this export: the statement is in the
@@ -841,12 +1145,17 @@ def main() -> int:
                   f"assumptions={row['assumptions']} "
                   f"(proved {row['verified_at']})")
             continue
-        out = work / re.sub(r"[^A-Za-z0-9_]", "_", short).strip("_")
+        # The directory name carries the declaration's identity, not only its
+        # spelling: two declarations whose short names slug to the same string
+        # (`TgtNodePres.of` and `TgtNodePres.of!`) shared a directory, and the
+        # second one's artifact overwrote the first (§14.1, item 5).
+        out = work / (re.sub(r"[^A-Za-z0-9_]", "_", short).strip("_")
+                      + "_" + hashlib.sha1(nm.encode()).hexdigest()[:8])
         # Not this export, but the same declaration name was proved somewhere:
         # ask the emitter what *this* export states and look that up. The
         # emitter prints the digest of exactly the band the ledger keys on.
         if content and nm in known_names:
-            dg = digest_of(nm, export_path, out)
+            dg = digest_of(ex, export_path, nm, out)
             crow = content.get(dg) if dg else None
             if crow is not None and crow["kind"] == kind:
                 by_statement += 1
@@ -862,11 +1171,19 @@ def main() -> int:
         # chapters that is tens of GB (`ChapterEsaClosureCore` reached 11.9 GB
         # on one declaration). Bound it like `mm0-rs` and say which bound was
         # hit, instead of letting it OOM the machine.
-        try:
-            r = run([str(EMITTER), str(export_path), nm, str(out)] + extra,
-                    timeout=EMIT_TIMEOUT, preexec_fn=cap_mem(EMIT_MEM_GB))
-        except subprocess.TimeoutExpired:
-            failed.append((short, f"emit: over {EMIT_TIMEOUT} s"))
+        if subprocess_emit:
+            try:
+                r = run([str(EMITTER), str(export_path), nm, str(out)] + extra,
+                        timeout=EMIT_TIMEOUT, preexec_fn=cap_mem(EMIT_MEM_GB))
+            except subprocess.TimeoutExpired:
+                record_failure(short, f"emit: over {EMIT_TIMEOUT} s", out)
+                print(f"  emit  ⏱ {short}: over {EMIT_TIMEOUT} s")
+                continue
+        else:
+            r = emit_forked(ex, export_path, nm, out, defer=defer,
+                            keep_proofs=keep_proofs)
+        if r.returncode == 124:
+            record_failure(short, f"emit: over {EMIT_TIMEOUT} s", out)
             print(f"  emit  ⏱ {short}: over {EMIT_TIMEOUT} s")
             continue
         if r.returncode != 0:
@@ -874,23 +1191,23 @@ def main() -> int:
             # a SIGKILL, which is what a cgroup's `MemoryMax` sends. Both are
             # the bound, and neither is a statement about the derivation.
             if r.returncode in (-6, -9) or "MemoryError" in (r.stdout + r.stderr):
-                failed.append((short, f"emit: over {bound_gb(EMIT_MEM_GB)} GiB"))
+                record_failure(short, f"emit: over {bound_gb(EMIT_MEM_GB)} GiB", out)
                 print(f"  emit  ✗ {short}: over {bound_gb(EMIT_MEM_GB)} GiB")
             else:
-                failed.append((short, last_meaningful(r.stdout + r.stderr)))
+                record_failure(short, last_meaningful(r.stdout + r.stderr), out)
                 print(f"  emit  ✗ {short}: {failed[-1][1][:110]}")
             continue
         # The artifact's path is what the emitter says it wrote, not a guess:
         # the stem is the declaration's last name component plus `_typing`.
         wrote = re.search(r"wrote\s*:\s*(\S+)\.mm0", r.stdout)
         if wrote is None:
-            failed.append((short, "emitter succeeded without naming its artifact"))
+            record_failure(short, "emitter succeeded without naming its artifact", out)
             continue
         stem = Path(wrote.group(1))
         full0 = out / "full.mm0"
         full1 = out / "full.mm1"
-        full0.write_text(prefix_text + stem.with_suffix(".mm0").read_text())
-        full1.write_text(prefix_text + stem.with_suffix(".mm1").read_text())
+        prepend_file(prefix_text, stem.with_suffix(".mm0"), full0)
+        prepend_file(prefix_text, stem.with_suffix(".mm1"), full1)
         # `mm0-rs` is superlinear in proof size: a 10^5-rule term took >12
         # minutes and 13 GB without finishing. Bound it, and report the bound
         # as its own outcome rather than as a verdict on the derivation.
@@ -898,15 +1215,15 @@ def main() -> int:
             c = run(["mm0-rs", "compile", str(full1), str(out / "full.mmb")],
                     timeout=MM0_RS_TIMEOUT, preexec_fn=cap_mem(MM0_RS_MEM_GB))
         except subprocess.TimeoutExpired:
-            failed.append((short, f"mm0-rs: over {MM0_RS_TIMEOUT} s"))
+            record_failure(short, f"mm0-rs: over {MM0_RS_TIMEOUT} s", out)
             print(f"  mm0-rs ⏱ {short}: over {MM0_RS_TIMEOUT} s")
             continue
         if c.returncode in (-6, -9) or "memory allocation" in (c.stdout + c.stderr):
-            failed.append((short, f"mm0-rs: over {bound_gb(MM0_RS_MEM_GB)} GiB"))
+            record_failure(short, f"mm0-rs: over {bound_gb(MM0_RS_MEM_GB)} GiB", out)
             print(f"  mm0-rs ✗ {short}: over {bound_gb(MM0_RS_MEM_GB)} GiB")
             continue
-        if c.returncode != 0 or "sorry" in (c.stdout + c.stderr):
-            failed.append((short, "mm0-rs: " + last_meaningful(c.stdout + c.stderr)))
+        if c.returncode != 0 or _SORRY.search(c.stdout + c.stderr):
+            record_failure(short, "mm0-rs: " + last_meaningful(c.stdout + c.stderr), out)
             print(f"  mm0-rs ✗ {short}: {failed[-1][1][:110]}")
             continue
         # `mm0-c`'s output is spilled to files, not captured: on rejection it
@@ -928,44 +1245,35 @@ def main() -> int:
                 log0.unlink(missing_ok=True)
                 log1.unlink(missing_ok=True)
         except subprocess.TimeoutExpired:
-            failed.append((short, f"mm0-c: over {MM0_C_TIMEOUT} s"))
+            record_failure(short, f"mm0-c: over {MM0_C_TIMEOUT} s", out)
             print(f"  mm0-c ⏱ {short}: over {MM0_C_TIMEOUT} s")
             continue
         if k.returncode != 0:
-            failed.append((short, "mm0-c: " + reason))
+            record_failure(short, "mm0-c: " + reason, out)
             print(f"  mm0-c ✗ {short}: {failed[-1][1][:110]}")
             continue
-        head = stem.with_suffix(".mm0").read_text()
-        rules = int(re.search(r"Rules applied : (\d+)", head).group(1))
-        axs = int(re.search(r"Assumptions   : (\d+)", head).group(1))
+        rules, axs = header_fields(stem.with_suffix(".mm0"))
         closed.append((short, kind, rules, axs))
         discarded = ""
         if ledger is not None and memo_root is not None:
             # The statement and its verdict outlive the proof; the proof does
             # not. `--keep-proofs` is for reading a derivation afterwards, not
             # for the sweep.
-            ledger_append(memo_root, full0.read_text(), ex.sha256, theory_sha,
+            ledger_append(memo_root, full0, ex.sha256, theory_sha,
                           mode_tag, nm, kind, rules, axs,
-                          hashlib.sha256(full1.read_bytes()).hexdigest(),
-                          full1.stat().st_size)
+                          _file_sha256(full1), full1.stat().st_size)
             if not keep_proofs:
-                # Both copies of the derivation go: the emitter's own `.mm1`
-                # and the assembled one, its binary, and the conversion
-                # obligations that existed to build it. What stays is
-                # `full.mm0`, the statement as `mm0-c` read it.
-                discard_proofs(out)
-                stem.with_suffix(".mm0").unlink(missing_ok=True)
+                # The whole work directory goes, not just the derivation: the
+                # statement is retained by the ledger, and what was left behind
+                # was the emitter's `.mm0`, its `.mm1`, the assembled pair, the
+                # binary and the obligations — `full.mm0` was kept for no reader
+                # at 17 GB per sweep (§14.1, item 5).
+                shutil.rmtree(out, ignore_errors=True)
                 discarded = ", proof discarded"
         print(f"  pass  ✓ {short} [{kind}] rules={rules} assumptions={axs}{discarded}")
 
     print()
     if record_failures and memo_root is not None and ledger is not None:
-        for short, reason in failed:
-            if short not in names:
-                continue
-            nm, kind = names[short]
-            ledger_append_failure(memo_root, ex.sha256, theory_sha, mode_tag, nm,
-                                  kind, reason)
         print(f"failures recorded  : {len(failed)} rows marked `failed`")
     print(f"verified closures : {len(closed)}/{len(scope)}")
     if remembered:

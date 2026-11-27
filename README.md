@@ -89,7 +89,7 @@ Liquid split checker and a replayable MM0 certificate. It stages dependent
 types, explicit equality and induction before an optional BendTT-style profile.
 Separate cards reuse the host adapters for shared memory and parallel jobs.
 
-The [compositional MM0 plan](PLAN_proof_chain.md) makes higher-level proofs
+The [compositional MM0 plan](docs/lean4mm0.md#15-compositional-proof-producing-compilation-in-mm0-pc00pc15) makes higher-level proofs
 reusable across lowering steps, with a [shared proof-chain contract](docs/PROOF_CHAIN.md)
 for CPU, GPU and NPU representations. It follows Hydro's typed-IR/semantic-transfer
 pattern while recording actual compiler, instruction and opaque-device proof gaps.

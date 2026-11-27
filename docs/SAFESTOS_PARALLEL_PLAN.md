@@ -179,7 +179,7 @@ runtime/backend edges. Mutations for duplicated join, publishing a result
 before its slots are visible, overlapping outputs and retirement during a live
 call fail the relevant checks. Publish the deepest proof cut, including any
 remaining queue or memory-model assumptions.
-[PC08 and PC13](../PLAN_proof_chain.md#pc08--connect-one-actual-cpu-instruction-fragment).
+[PC08 and PC13](lean4mm0.md#pc08--connect-one-actual-cpu-instruction-fragment).
 
 ### SP05 — Extend the same jobs to regular GPU and NPU work
 
@@ -200,7 +200,7 @@ instruction boundaries.
 device adapters. A serial oracle, delayed-completion tests and a physical
 execution record cover the same semantics. Keep barrier, launch, numeric and
 driver assumptions with the device proof. [GPU execution plan](gpu/NEXT_STEPS.md),
-[NPU boundary](../PLAN_proof_chain.md#pc11--define-the-first-npu-proof-branch-and-its-opaque-cut).
+[NPU boundary](lean4mm0.md#pc11--define-the-first-npu-proof-branch-and-its-opaque-cut).
 
 **First parallel patch.** After the paired clamp can run under Cranelift,
 deliver SP00's serial map-and-sum fixture and reuse its oracle unchanged in

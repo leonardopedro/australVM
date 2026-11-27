@@ -5,7 +5,7 @@ owner's requirement: properties established at a high representation should be
 reused at lower representations, with lower layers discharging remaining
 obligations and proving what their transformations introduce.
 
-The executor plan is [PLAN_proof_chain.md](../PLAN_proof_chain.md). It shares
+The executor plan is [docs/lean4mm0.md §15](lean4mm0.md#15-compositional-proof-producing-compilation-in-mm0-pc00pc15). It shares
 interfaces with [PLAN_gpu_kernels.md](../PLAN_gpu_kernels.md) and the proposed
 [GPU v1 contract](gpu/KERNEL_V1.md). This document does not claim that the proof
 chain, a CPU/GPU verified compiler, or an NPU backend has been implemented.
@@ -306,7 +306,7 @@ NPU boundary before claiming support. Do not rebuild the same algorithm proof
 for every target, and do not attempt full CIC, every LLVM pass and all hardware
 models before the first small chain.
 
-[PLAN_proof_chain.md](../PLAN_proof_chain.md) divides this into bounded executor
+[docs/lean4mm0.md §15](lean4mm0.md#15-compositional-proof-producing-compilation-in-mm0-pc00pc15) divides this into bounded executor
 cards. This proposal leaves existing approved MM0 files, W3 state/count tables,
 proof scripts and sibling repositories unchanged. Source review and documentation
 checks were performed; no new MM0, Lean, native or accelerator proof was run.

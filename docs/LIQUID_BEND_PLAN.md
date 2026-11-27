@@ -24,7 +24,7 @@ backend execution and service progress have separate acceptance milestones.
 
 [Liquid implementation record](../PLAN_liquid_types.md#10-bend-2-and-the-next-liquid-index-layer),
 [conversion probe](lean4mm0.md#138-the-toolchains-build-again-the-certificate-path-stops-at-the-front-end),
-[GPU execution record](gpu/EXECUTION.md), [proof-chain tracker](../PLAN_proof_chain.md).
+[GPU execution record](gpu/EXECUTION.md), [proof-chain tracker](lean4mm0.md#15-compositional-proof-producing-compilation-in-mm0-pc00pc15).
 
 Use BendTT's explicit equality, expected-type-driven matches, affine closure
 discipline and structural descent as design references. Its result about the
@@ -525,7 +525,7 @@ fences, durable identities and bounded work. Cover service responsiveness and
 hardware overlap with separate tests from the pure proof.
 [GPU implementation continuation](gpu/NEXT_STEPS.md),
 [distributed security roadmap](../PLAN_distributed_security.md),
-[proof-chain tasks](../PLAN_proof_chain.md).
+[proof-chain tasks](lean4mm0.md#15-compositional-proof-producing-compilation-in-mm0-pc00pc15).
 
 ## 7. Bend as a source of proofs and libraries
 

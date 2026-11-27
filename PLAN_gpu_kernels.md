@@ -51,7 +51,7 @@ boundary for a later **MLIR backend**, retaining the old programme's direction.
 That extension gets explicit tasks G19–G21 rather than an undocumented promise.
 
 Proof-producing compilation is a first-class companion workstream:
-[PLAN_proof_chain.md](PLAN_proof_chain.md) and its
+[docs/lean4mm0.md §15](docs/lean4mm0.md#15-compositional-proof-producing-compilation-in-mm0-pc00pc15) and its
 [design contract](docs/PROOF_CHAIN.md) specify reusable MM0 application theorems,
 representation semantics, lowering certificates and typed residual obligations
 across CPU/GPU/NPU branches. Extend the existing subjects and evidence statuses

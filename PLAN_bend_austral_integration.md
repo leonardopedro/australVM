@@ -15,7 +15,7 @@ also hosts the shared WGSL and MLIR accelerator paths. BendRT supplies design
 ideas and benchmark baselines. The shared execution milestone requires that
 both frontends' artifacts to run with BendRT absent. The plan extends
 [the SafestOS parallelism plan](docs/SAFESTOS_PARALLEL_PLAN.md),
-[the proof-chain plan](PLAN_proof_chain.md),
+[the proof-chain plan](docs/lean4mm0.md#15-compositional-proof-producing-compilation-in-mm0-pc00pc15),
 [the GPU work](docs/gpu/NEXT_STEPS.md), and [the Liquid/Bend work](docs/LIQUID_BEND_PLAN.md).
 
 ## What is already verified
@@ -24,8 +24,8 @@ both frontends' artifacts to run with BendRT absent. The plan extends
 | --- | --- | --- |
 | Bend `law`/`def` → TypeScript elaboration → `.bendtt` → Lean `Book.check` | Lean proves soundness and consistency of the executable checker, plus progress, termination and equality adequacy under the published hypotheses. Users write program laws and their proofs in Bend. | `bend2/safe.ts` elaboration and the Lean text parser are outside the checker theorems. Native compilation in `bend2/comp.ts` and the BendRT scheduler and device runtime need their own semantics and correspondence. [BendTT §8](https://github.com/bendlang/bend/blob/0e2f38f759cc830849e489307f3d256a7d148288/paper/BendTT.pdf), [BendRT §12](https://github.com/bendlang/bend/blob/0e2f38f759cc830849e489307f3d256a7d148288/paper/BendRT.pdf) |
 | Austral frontend → Liquid obligations → Why3 | Typed admission, selected refinement VCs, limited totality and index conversion, and audited split machinery. | A proved Why3 VC is evidence under that prover route. Shared strict MM0 requires a derivation of the identical obligation in the approved theory. Compiler pipeline correctness requires additional edges. [Liquid work](PLAN_liquid_types.md), [Liquid/Bend continuation](docs/LIQUID_BEND_PLAN.md) |
-| Austral frontend → KernelIR → WGSL/wgpu | Compiled pointwise and bounded-fold examples have run on physical adapters. MM0 has modeled word/map semantics, transfer/composition, a reflected source/IR clamp bound with a recorded trusted reflection, and selected memory-plan reasoning. | PC05 and PC07 still owe the actual WGSL semantic edge and its composition. Naga and execution tests check different properties from semantic preservation. [Execution record](docs/gpu/EXECUTION.md), [PC04 reflection](docs/proof/SOURCE_IR.md), [proof tracker](PLAN_proof_chain.md) |
-| Austral → CPS → CLIF → CPU | JIT execution, opcode census and encoding coverage, selected step lemmas, imported RV64 model statements, and explicit projection work for memory. | Coverage and toy proofs leave compiler layout, CLIF/native semantics and actual machine bytes as separate proof work. KernelIR has a CPU reference evaluator today. A common native KernelIR lane is new. [Kernel verification plan](PLAN_sota_kernel_verification.md), [proof tracker](PLAN_proof_chain.md) |
+| Austral frontend → KernelIR → WGSL/wgpu | Compiled pointwise and bounded-fold examples have run on physical adapters. MM0 has modeled word/map semantics, transfer/composition, a reflected source/IR clamp bound with a recorded trusted reflection, and selected memory-plan reasoning. | PC05 and PC07 still owe the actual WGSL semantic edge and its composition. Naga and execution tests check different properties from semantic preservation. [Execution record](docs/gpu/EXECUTION.md), [PC04 reflection](docs/proof/SOURCE_IR.md), [proof tracker](docs/lean4mm0.md#15-compositional-proof-producing-compilation-in-mm0-pc00pc15) |
+| Austral → CPS → CLIF → CPU | JIT execution, opcode census and encoding coverage, selected step lemmas, imported RV64 model statements, and explicit projection work for memory. | Coverage and toy proofs leave compiler layout, CLIF/native semantics and actual machine bytes as separate proof work. KernelIR has a CPU reference evaluator today. A common native KernelIR lane is new. [Kernel verification plan](PLAN_sota_kernel_verification.md), [proof tracker](docs/lean4mm0.md#15-compositional-proof-producing-compilation-in-mm0-pc00pc15) |
 | Lean → `lean4export` → AustralVM translation → MM0 | The repo records statement encodings, selected closed certificates and generated typing derivations with explicit premises. Unfer can also check supported Lean exports with Nanoda. | Lean export checking, MM0 statement translation, a typing derivation, and MM0 replay of the original mathematical claim are distinct milestones. Full replay of BendTT's Lean metatheory is open. [Translator lessons and limits](docs/lean4mm0.md), [unfer verifier](../unfer/prob_kernel/src/verify.rs) |
 
 ## Shared tooling and proof contract
@@ -315,7 +315,7 @@ observation model. A mixed-frontend batch uses bounded asynchronous submission
 while completion is delayed or reordered. Tests exercise queue saturation,
 timeouts, duplicated completions, device loss and failed remote delivery. Each
 device release records backend identity, verified cut and physical test result.
-[GPU next steps](docs/gpu/NEXT_STEPS.md), [PC09–PC13](PLAN_proof_chain.md#pc09--track-and-certify-selected-mlir-lowering-steps),
+[GPU next steps](docs/gpu/NEXT_STEPS.md), [PC09–PC13](docs/lean4mm0.md#pc09--track-and-certify-selected-mlir-lowering-steps),
 [SafestOS and Cranelift parallelism tasks](docs/SAFESTOS_PARALLEL_PLAN.md),
 [distributed runtime plan](PLAN_distributed_security.md), [unfer federation](../unfer/docs/FEDERATION.md).
 

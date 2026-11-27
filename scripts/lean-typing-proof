@@ -101,11 +101,17 @@ if os.environ.get("LTP_PROBE_LOOKUP", "0") == "1":
 # This toolchain rejects numeral literals inside `$…$`, so every nat payload
 # (a universe id, a symbol id, a de Bruijn index) is a declared constant.
 NATS: list[str] = []
+# The same names as a set: `nat_name` is called once per payload constant per
+# encoding, and `name not in NATS` was a linear scan of every constant declared
+# so far — O(n²) in the number of distinct payloads, on a walk that asks
+# thousands of times per rule.
+NATS_SET: set[str] = set()
 
 
 def nat_name(tag: str) -> str:
     name = "t_" + "".join(c if c.isalnum() else "_" for c in tag)
-    if name not in NATS:
+    if name not in NATS_SET:
+        NATS_SET.add(name)
         NATS.append(name)
     return name
 
@@ -124,6 +130,21 @@ ENC_CHUNK = 64 << 10
 # Process start on the same clock the stopping conditions use, so a stopped run
 # can report how long it took without threading a timestamp through the walk.
 _PROC_T0 = time.monotonic()
+
+
+def _dg(*parts) -> bytes:
+    """A 32-byte structural digest of `parts`, each length-prefixed.
+
+    The length prefix is what makes the hash a *parse* rather than a
+    concatenation: without it `("ab", "c")` and `("a", "bc")` would collide,
+    and a collision here would make two different types look like one type.
+    """
+    h = hashlib.sha256()
+    for p in parts:
+        b = p.encode() if isinstance(p, str) else p
+        h.update(len(b).to_bytes(8, "big"))
+        h.update(b)
+    return h.digest()
 
 
 class _Hasher:
@@ -585,33 +606,79 @@ class Enc:
         return self._ds_bytes(eid) >= self.ds_min
 
     def _ds_bytes(self, eid: int) -> int:
-        """Expanded size of `eid`'s encoding, measured once per expression.
+        """Expanded size of `eid`'s encoding, computed bottom-up once per node.
 
-        The walk records every node it visits (`_enc` does that while `_ds_off`
-        is set), so measuring a subtree also sizes its parts and the whole
-        certificate costs one extra expansion, not one per node.
+        A dynamic programme over the expression DAG, not a walk. Each node's
+        size is its own framing plus its children's, and a memo hit ends the
+        question; the walk this replaces re-expanded the whole subtree at every
+        call, so a DAG shared at depth d was measured once per *path* — the
+        exponential term `_ds_walk` was introduced to work around (§13.60).
 
-        It is a *no-naming* walk in both senses: `_ds_off` keeps the encoder
-        from substituting a name for a child, and `_ds_walk` keeps it from
-        returning a memoised text. Both matter. A memo entry may be a
-        shared-mode text (a name where a child was interned), and it is a
-        finished expansion, so a `setdefault` would never run for it — which is
-        how a 519 KB body measured 0 B and was never a split candidate (§13.60).
+        The number is the one the encoder writes, derived from `_enc_tokens`'s
+        own shapes: `(tapp a b)` is the 6-byte `(tapp ` opener, the separator
+        and the closer (8 bytes of framing) plus the two children, and likewise
+        for every branch. The *side effects* are kept and kept in the encoder's
+        order — a universe registers its level and a constant its symbol the
+        first time either is met, which is what numbers `t_levN`/`t_symN` —
+        because this pass runs before the artifact is written and a different
+        first-sight order would renumber the artifact.
+
+        It is a no-naming measurement in both senses the walk needed: nothing
+        here substitutes a name for a child, and nothing reads the text memo, so
+        every size is an expanded one.
         """
         n = self._ds_size.get(eid)
         if n is not None:
             return n
-        outer_walk = self._ds_walk
-        self._ds_walk = True
-        self._ds_off += 1
-        try:
-            buf = EncBuf(_NullSink())
-            self._top(eid, buf)
-            buf._flush()
-        finally:
-            self._ds_off -= 1
-            self._ds_walk = outer_walk
-        return self._ds_size.get(eid, 0)
+        return self._ds_node_bytes(eid, self.exprs[eid])
+
+    def _ds_node_bytes(self, eid: int, e: dict) -> int:
+        """One node's expanded byte count, from its children's (see `_ds_bytes`)."""
+        if "bvar" in e:
+            k = e["bvar"]
+            if not self.succ_idx:
+                n = len(f"(tvar {nat_name('idx' + str(k))})")
+            else:
+                # Spelled the way `_enc_tokens` spells it, so the length is read
+                # off the text rather than from a hand-counted arithmetic that
+                # was already one byte short of the closer on the first try.
+                idx = "tzero"
+                for _ in range(k):
+                    idx = f"(tsucc {idx})"
+                n = len(f"(tvar {idx})")
+        elif "sort" in e:
+            n = len(self.sort(e))
+        elif "const" in e:
+            n = len(self.sym(self.ex.name(e["const"]["name"])))
+        elif "mdata" in e:
+            n = self._ds_bytes(e["mdata"]["expr"])
+        elif "app" in e:
+            a = e["app"]
+            n = 8 + self._ds_bytes(a["fn"]) + self._ds_bytes(a["arg"])
+        elif "forallE" in e:
+            f = e["forallE"]
+            n = 7 + self._ds_bytes(f["type"]) + self._ds_bytes(f["body"])
+        elif "lam" in e:
+            n = 7 + self._ds_bytes(e["lam"]["body"])
+        elif "letE" in e:
+            le = e["letE"]
+            n = 15 + self._ds_bytes(le["body"]) + self._ds_bytes(le["value"])
+        elif "proj" in e:
+            st = e["proj"]
+            n = 14 + 7 * st.get("idx", 0) + self._ds_bytes(st["struct"])
+        elif "natVal" in e:
+            n = len(self.sym(f"nat{e['natVal']}"))
+        elif "strVal" in e:
+            n = len(self.sym(f"str{e['strVal']}"))
+        elif "sym" in e:
+            n = len(self.sym(e["sym"]))
+        elif "tsubst" in e:
+            t = e["tsubst"]
+            n = 10 + self._ds_bytes(t["b"]) + self._ds_bytes(t["x"])
+        else:
+            raise SystemExit(f"unencoded expr kind {sorted(e.keys())}")
+        self._ds_size[eid] = n
+        return n
 
     def write_defs(self, fh) -> int:
         """Write one `def` per interned subterm, before any use of it.
@@ -819,29 +886,90 @@ class Enc:
         return buf.bytes
 
     def digest(self, eid: int) -> bytes:
-        """sha256 of `eid`'s encoding, computed without materialising it."""
+        """A content hash of `eid`'s *expanded* encoding, from its DAG.
+
+        Two nodes get the same digest exactly when they encode to the same
+        bytes, so the conversions that compare digests (§13.36) keep their
+        answers — but the answer is now a Merkle hash over the node graph
+        rather than a SHA-256 of the expanded text, which cost one full
+        expansion per distinct node and re-expanded shared DAGs.
+
+        The structure is `_enc_tokens`'s: a leaf hashes the text it writes, and
+        a composite hashes a tag and its children's digests, length-prefixed so
+        no two node shapes can be confused. Three encoder-level identifications
+        are kept, because they are identities of the *text*: `mdata` is
+        transparent, and `letE b v` is `(tapp (tabs b) v)` — exactly the term
+        `app(lam b, v)` encodes to — so it hashes with the same tags.
+
+        Always the expanded form, even under def-sharing: a name is one
+        expression's spelling, not its content (the measurement behind §13.36).
+        """
         d = self._digest.get(eid)
         if d is not None:
             return d
-        h = _Hasher()
-        buf = EncBuf(h)
-        # Always the *expanded* text, even under def-sharing. A digest decides
-        # whether two types are the same type (§13.36), and a name is one
-        # expression's spelling, not its content: hashing `sd12` against the
-        # expansion it stands for turned 7 923 conversions that used to be
-        # recognised as identical into extra `ty_deq` assumptions (measured
-        # 2026-11-22). With this the assumption count is the one it is today.
-        self._ds_off += 1
-        try:
-            self._top(eid, buf)
-            buf._flush()
-        finally:
-            self._ds_off -= 1
-        d = h.digest()
+        # `mdata` needs no stripping first: `_digest_node` is transparent to it,
+        # which is what the expanded text is.
+        d = self._digest_node(eid)
         # One 32-byte digest per expression seen: the memo is a convenience (a
         # miss recomputes), so it is simply dropped when it gets large.
         if len(self._digest) > 200_000:
             self._digest.clear()
+        self._digest[eid] = d
+        return d
+
+    def _digest_node(self, eid: int) -> bytes:
+        """One node's Merkle digest (see `digest`), memoised in `_digest`."""
+        d = self._digest.get(eid)
+        if d is not None:
+            return d
+        e = self.exprs[eid]
+        if "bvar" in e:
+            k = e["bvar"]
+            if not self.succ_idx:
+                d = _dg("v", f"(tvar {nat_name('idx' + str(k))})")
+            else:
+                idx = "tzero"
+                for _ in range(k):
+                    idx = f"(tsucc {idx})"
+                d = _dg("v", f"(tvar {idx})")
+        elif "sort" in e:
+            d = _dg("s", self.sort(e))
+        elif "const" in e:
+            # The *symbol text*, not the constant's name: `const Foo` and a
+            # synthetic `sym "Foo"` write the same `(tentity t_symK)`, and a
+            # digest that separated them would refuse an identity the artifact
+            # states.
+            d = _dg("e", self.sym(self.ex.name(e["const"]["name"])))
+        elif "mdata" in e:
+            d = self._digest_node(e["mdata"]["expr"])
+        elif "app" in e:
+            a = e["app"]
+            d = _dg("a", self._digest_node(a["fn"]),
+                    self._digest_node(a["arg"]))
+        elif "forallE" in e:
+            f = e["forallE"]
+            d = _dg("p", self._digest_node(f["type"]),
+                    self._digest_node(f["body"]))
+        elif "lam" in e:
+            d = _dg("l", self._digest_node(e["lam"]["body"]))
+        elif "letE" in e:
+            le = e["letE"]
+            d = _dg("a", _dg("l", self._digest_node(le["body"])),
+                    self._digest_node(le["value"]))
+        elif "proj" in e:
+            st = e["proj"]
+            d = _dg("j", str(st.get("idx", 0)), self._digest_node(st["struct"]))
+        elif "natVal" in e:
+            d = _dg("e", self.sym(f"nat{e['natVal']}"))
+        elif "strVal" in e:
+            d = _dg("e", self.sym(f"str{e['strVal']}"))
+        elif "sym" in e:
+            d = _dg("e", self.sym(e["sym"]))
+        elif "tsubst" in e:
+            t = e["tsubst"]
+            d = _dg("t", self._digest_node(t["b"]), self._digest_node(t["x"]))
+        else:
+            raise SystemExit(f"unencoded expr kind {sorted(e.keys())}")
         self._digest[eid] = d
         return d
 
@@ -1186,6 +1314,35 @@ def _json_write_str(out, s: str) -> None:
 # file, small enough that a 124 GB stream is 62 of them rather than one file no
 # reader can open (§13.32).
 OBLIG_PART_BYTES = 2 * 1024 ** 3
+
+
+class _NullObligationSink:
+    """The certificate stream switched off (`--no-obligations`).
+
+    Not the same as `oblig_sink=None`, which *retains* the certificates in
+    memory for the in-process path: this one is asked for them and drops them,
+    so a run that does not want the file also does not pay for the tree walk
+    that would write it.
+    """
+
+    noop = True
+    # The stopped-run reports read these off the sink; a disabled stream has
+    # written nothing, which is exactly what they should say.
+    lines = 0
+    parts: tuple = ()
+    _fragmented = False
+
+    def begin(self, ax: str) -> None:
+        pass
+
+    def write(self, s: str) -> None:
+        pass
+
+    def end_line(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
 
 
 class ObligationSink:
@@ -1926,6 +2083,11 @@ def main() -> int:
     # the same spools `--spine` reads and stops before the derivation, so its
     # cost is the export index plus the two encodes, not the proof search.
     digest = "--digest" in sys.argv
+    # `--no-obligations`: the certificate stream is off. The stream is the
+    # largest artifact an emit writes (124 GB on the ns row, §13.31) and the
+    # scanner deletes it immediately after every declaration, so a caller that
+    # never reads it can ask for it not to be built at all.
+    no_obligations = "--no-obligations" in sys.argv
     export_path, want, out_dir = Path(argv[0]), argv[1], Path(argv[2])
     # Profit mode is two runs (§13.56): the first counts what the artifact's
     # text repeats, the second emits with that answer instead of a size floor.
@@ -1951,8 +2113,36 @@ def main() -> int:
     # Lazily: one declaration reaches a few thousand expressions of a chapter's
     # millions, and materialising the rest cost more memory than the whole
     # derivation (measured: 3.8 GB to parse `ChapterH1`, 6 798 expressions used).
-    ex = l2m.Export(export_path, lazy=True)
+    # `compute_sha=False`: nothing here reads `Export.sha256`, and hashing a
+    # 507 MB export is a second and a half per process (§14.1).
+    ex = l2m.Export(export_path, lazy=True, compute_sha=False)
     stats("export indexed")
+    return run_one(ex, export_path, want, out_dir, spine=spine, defer=defer,
+                   digest=digest, no_obligations=no_obligations)
+
+
+def run_one(ex, export_path: Path, want: str, out_dir: Path, *,
+            spine: bool = False, defer: bool = False, digest: bool = False,
+            no_obligations: bool = False, compact: bool = False,
+            emit_mmb: bool = False) -> int:
+    """Emit one declaration from an export that is already indexed.
+
+    `main` is this plus the index, because indexing the export is the cost a
+    scan pays once and 3 975 times otherwise: the scanner loads the export
+    itself and forks a child per declaration, and the child's whole job is this
+    function (§14.2). Everything one emit needs is here — the derivation, the
+    two artifacts, the checks that decide what the header says — so a child can
+    run it with no state but the export.
+
+    The naming tables are module-level and are *reset* here: a forked child
+    inherits its parent's copy, and a child that numbered `t_symK` from what its
+    parent had already interned would emit an artifact that disagrees with every
+    other row's.
+    """
+    NATS.clear()
+    NATS_SET.clear()
+    SYMS.clear()
+    t0 = time.time()
     # The typing derivation writes variables as the theory names them (succ
     # chains); the statement-only artifact keeps the corpus' flat index form.
     enc = Enc(ex, succ_idx=spine)
@@ -2096,8 +2286,8 @@ def main() -> int:
     # truncated last line is the caller's cue to discard it — where before it
     # left no file at all. `LTP_OBLIG_CHUNK=<bytes>` rolls it into bounded parts
     # with a manifest and an index (§13.32); unset keeps the single file.
-    oblig_sink = ObligationSink(
-        stem, limit=int(os.environ.get("LTP_OBLIG_CHUNK", "0") or 0))
+    oblig_sink = (_NullObligationSink() if no_obligations else ObligationSink(
+        stem, limit=int(os.environ.get("LTP_OBLIG_CHUNK", "0") or 0)))
     # The assumptions are streamed the same way: §13.27 measures 444 MB of
     # axiom text at 116 874 obligations, and every byte of it is in the artifact
     # anyway. The spool is concatenated into both `.mm0` and `.mm1` afterwards
@@ -2724,6 +2914,10 @@ class Deriver:
         costs is its recursion depth rather than its size.
         """
         sink = self.oblig_sink
+        if getattr(sink, "noop", False):
+            # The stream is off: the work of writing a certificate is the tree
+            # walk, so it is skipped, not written into a sink that discards it.
+            return
         if sink is None:
             memo: dict = {}
             self.oblig_tree.append({
@@ -3016,6 +3210,10 @@ class Deriver:
         export when first asked for, keyed by qualified name.
         """
         if self._ind_decls is None:
+            if getattr(self.ex, "ind_decls", None):
+                # Indexed by `Export.__init__` during the parse it already did.
+                self._ind_decls = self.ex.ind_decls
+                return self._ind_decls.get(nm)
             self._ind_decls = {}
             import json
 
@@ -3039,6 +3237,9 @@ class Deriver:
         is first asked for, keyed by the same flattened names.
         """
         if self._ind_types is None:
+            if getattr(self.ex, "ind_types", None):
+                self._ind_types = self.ex.ind_types
+                return self._ind_types.get(nm)
             self._ind_types = {}
             import json
 
@@ -3158,9 +3359,17 @@ class Deriver:
         e = self.exprs[eid]
         if "bvar" in e:
             return eid if e["bvar"] < cutoff else self.mk({"bvar": e["bvar"] + delta})
-        if ("sort" in e or "const" in e or "proj" in e or "natVal" in e
+        if ("sort" in e or "const" in e or "natVal" in e
                 or "strVal" in e or "sym" in e):
             return eid
+        if "proj" in e:
+            # A projection is *not* a leaf: its structure may be a `bvar`, and
+            # returning it unchanged lifted and substituted a term that was
+            # still open — the corruption §4 of the review found, and the one
+            # case where the closed-leaf shortcut was wrong rather than fast.
+            d = dict(e["proj"])
+            d["struct"] = self.lift(d["struct"], delta, cutoff)
+            return self.mk({"proj": d})
         if "tsubst" in e:
             return self.mk({"tsubst": {
                 "b": self.lift(e["tsubst"]["b"], delta, cutoff),
@@ -3211,9 +3420,14 @@ class Deriver:
             if k == depth:
                 return arg
             return eid if k < depth else self.mk({"bvar": k - 1})
-        if ("sort" in e or "const" in e or "proj" in e or "natVal" in e
+        if ("sort" in e or "const" in e or "natVal" in e
                 or "strVal" in e or "sym" in e):
             return eid
+        if "proj" in e:
+            # See `_lift`: the projected structure is an ordinary subterm.
+            d = dict(e["proj"])
+            d["struct"] = self.subst0(d["struct"], arg, depth)
+            return self.mk({"proj": d})
         if "tsubst" in e:
             return self.mk({"tsubst": {
                 "b": self.subst0(e["tsubst"]["b"], arg, depth),
@@ -3273,6 +3487,11 @@ class Deriver:
                 self.max_free(e["tsubst"]["b"], depth + 1),
                 self.max_free(e["tsubst"]["x"], depth),
             )
+        if "proj" in e:
+            # A projection of an open term is open: falling through to -1 said
+            # `(proj bvar0)` was closed, so a free index inside it was never
+            # counted and the scope check above could not see it.
+            return self.max_free(e["proj"]["struct"], depth)
         return -1
 
     def ctx_str(self, env: list[int]) -> str:

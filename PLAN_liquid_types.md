@@ -1681,7 +1681,7 @@ existing owner workflow. This pilot needs no change to the existing W3 counts.
 implementation-only mutation preserve the held-out statement and cause proof
 failure. Missing prover, stale artifact, substituted statement and a claimed
 proof with an open required premise each refuse the strict profile.
-[Proof-chain contract](docs/PROOF_CHAIN.md), [executor tasks](PLAN_proof_chain.md).
+[Proof-chain contract](docs/PROOF_CHAIN.md), [executor tasks](docs/lean4mm0.md#15-compositional-proof-producing-compilation-in-mm0-pc00pc15).
 
 ### L11e — Evaluate structural recursion for measures after the split pilot
 

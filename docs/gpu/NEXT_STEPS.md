@@ -865,7 +865,7 @@ of submit/completion and use device timing to substantiate hardware overlap.
 With one adapter, record the gap for two-device execution. Remote workers and
 NPU support are separately scoped in the
 [distributed plan](../../PLAN_distributed_security.md) and
-[proof plan](../../PLAN_proof_chain.md).
+[proof plan](../lean4mm0.md#15-compositional-proof-producing-compilation-in-mm0-pc00pc15).
 
 ## Copyable assignment
 

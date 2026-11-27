@@ -117,7 +117,7 @@ with optional device dependencies and no default dependency from the CPU JIT.
 The unfer CUDA stack currently locks cudarc 0.13.9. Do not introduce an unrelated
 cudarc generation into it when implementing a later CUDA backend.
 
-The subsequent [compositional proof plan](../PLAN_proof_chain.md) and
+The subsequent [compositional proof plan](lean4mm0.md#15-compositional-proof-producing-compilation-in-mm0-pc00pc15) and
 [proof-chain contract](PROOF_CHAIN.md) extend the design to reusable MM0
 properties across representations. They examine Hydro's typed graph and
 semantic-transfer machinery while distinguishing its modeled guarantees from
